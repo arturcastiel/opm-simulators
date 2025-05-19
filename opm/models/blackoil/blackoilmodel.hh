@@ -40,7 +40,7 @@
 #include <opm/models/blackoil/blackoilextbomodules.hh>
 #include <opm/models/blackoil/blackoilextensivequantities.hh>
 #include <opm/models/blackoil/blackoilfoammodules.hh>
-#include <opm/models/blackoil/blackoilindices.hh>
+#include <opm/models/blackoil/blackoilvariableandequationindices.hh>
 #include <opm/models/blackoil/blackoilintensivequantities.hh>
 #include <opm/models/blackoil/blackoillocalresidual.hh>
 #include <opm/models/blackoil/blackoilmicpmodules.hh>
@@ -59,6 +59,7 @@
 #include <opm/models/io/vtkcompositionmodule.hpp>
 #include <opm/models/io/vtkdiffusionmodule.hpp>
 
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -122,14 +123,14 @@ struct FluxModule<TypeTag, TTag::BlackOilModel> { using type = BlackOilDarcyFlux
 //! The indices required by the model
 template<class TypeTag>
 struct Indices<TypeTag, TTag::BlackOilModel>
-{ using type = BlackOilIndices<getPropValue<TypeTag, Properties::EnableSolvent>(),
-                               getPropValue<TypeTag, Properties::EnableExtbo>(),
-                               getPropValue<TypeTag, Properties::EnablePolymer>(),
-                               getPropValue<TypeTag, Properties::EnableEnergy>(),
-                               getPropValue<TypeTag, Properties::EnableFoam>(),
-                               getPropValue<TypeTag, Properties::EnableBrine>(),
-                               /*PVOffset=*/0,
-                               getPropValue<TypeTag, Properties::EnableMICP>()>; };
+{ using type = BlackOilVariableAndEquationIndices<getPropValue<TypeTag, Properties::EnableSolvent>(),
+                                                  getPropValue<TypeTag, Properties::EnableExtbo>(),
+                                                  getPropValue<TypeTag, Properties::EnablePolymer>(),
+                                                  getPropValue<TypeTag, Properties::EnableEnergy>(),
+                                                  getPropValue<TypeTag, Properties::EnableFoam>(),
+                                                  getPropValue<TypeTag, Properties::EnableBrine>(),
+                                                  /*PVOffset=*/0,
+                                                  getPropValue<TypeTag, Properties::EnableMICP>()>; };
 
 //! Set the fluid system to the black-oil fluid system by default
 template<class TypeTag>
@@ -611,11 +612,11 @@ protected:
         EnergyModule::registerOutputModules(asImp_(), this->simulator_);
         MICPModule::registerOutputModules(asImp_(), this->simulator_);
 
-        this->addOutputModule(new VtkBlackOilModule<TypeTag>(this->simulator_));
-        this->addOutputModule(new VtkCompositionModule<TypeTag>(this->simulator_));
+        this->addOutputModule(std::make_unique<VtkBlackOilModule<TypeTag>>(this->simulator_));
+        this->addOutputModule(std::make_unique<VtkCompositionModule<TypeTag>>(this->simulator_));
 
         if constexpr (enableDiffusion)
-            this->addOutputModule(new VtkDiffusionModule<TypeTag>(this->simulator_));
+            this->addOutputModule(std::make_unique<VtkDiffusionModule<TypeTag>>(this->simulator_));
     }
 
 private:

@@ -44,6 +44,12 @@
 
 #include <dune/common/fvector.hh>
 
+#include <array>
+#include <cmath>
+#include <istream>
+#include <memory>
+#include <ostream>
+#include <stdexcept>
 #include <string>
 
 namespace Opm {
@@ -118,7 +124,7 @@ public:
                                       Simulator& simulator)
     {
         if constexpr (enableSolvent)
-            model.addOutputModule(new VtkBlackOilSolventModule<TypeTag>(simulator));
+            model.addOutputModule(std::make_unique<VtkBlackOilSolventModule<TypeTag>>(simulator));
     }
 
     static bool primaryVarApplies(unsigned pvIdx)

@@ -93,8 +93,11 @@
 #include <mpi.h>
 #endif // HAVE_MPI
 
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
+
+#include <fmt/format.h>
 
 namespace Opm {
 
@@ -111,7 +114,20 @@ FlowGenericVanguard::FlowGenericVanguard(SimulationModelParams&& params)
     defineSimulationModel(std::move(params));
 
     fileName_ = Parameters::Get<Parameters::EclDeckFileName>();
-    edgeWeightsMethod_   = Dune::EdgeWeightMethod(Parameters::Get<Parameters::EdgeWeightsMethod>());
+    const std::string ewm = Parameters::Get<Parameters::EdgeWeightsMethod>();
+    if (ewm == "uniform") {
+        edgeWeightsMethod_ = Dune::EdgeWeightMethod::uniformEdgeWgt;
+    } else if (ewm == "transmissibility") {
+        edgeWeightsMethod_ = Dune::EdgeWeightMethod::defaultTransEdgeWgt;
+    } else if (ewm == "logtrans") {
+        edgeWeightsMethod_ = Dune::EdgeWeightMethod::logTransEdgeWgt;
+    } else {
+        std::string msg = fmt::format("Unknown value for --edge-weights-method parameter: '{}'. "
+                                      "Accepted values are 'uniform', 'transmissibility' and 'logtrans'.",
+                                      ewm);
+        OpmLog::error(msg);
+        throw std::runtime_error(msg);
+    }
 
 #if HAVE_OPENCL || HAVE_ROCSPARSE || HAVE_CUDA
     numJacobiBlocks_ = Parameters::Get<Parameters::NumJacobiBlocks>();
@@ -122,7 +138,24 @@ FlowGenericVanguard::FlowGenericVanguard(SimulationModelParams&& params)
 #if HAVE_MPI
     numOverlap_ = Parameters::Get<Parameters::NumOverlap>();
     addCorners_ = Parameters::Get<Parameters::AddCorners>();
-    partitionMethod_ = Dune::PartitionMethod(Parameters::Get<Parameters::PartitionMethod>());
+
+    const std::string pm = Parameters::Get<Parameters::PartitionMethod>();
+    if (pm == "simple") {
+        partitionMethod_ = Dune::PartitionMethod::simple;
+    } else if (pm == "zoltan") {
+        partitionMethod_ = Dune::PartitionMethod::zoltan;
+    } else if (pm == "metis") {
+        partitionMethod_ = Dune::PartitionMethod::metis;
+    } else if (pm == "zoltanwell") {
+        partitionMethod_ = Dune::PartitionMethod::zoltanGoG;
+    } else {
+        std::string msg = fmt::format("Unknown value for --partition-method parameter: '{}'. "
+                                      "Accepted values are 'simple', 'zoltan', 'metis', and 'zoltanwell'.",
+                                      pm);
+        OpmLog::error(msg);
+        throw std::runtime_error(msg);
+    }
+
     serialPartitioning_ = Parameters::Get<Parameters::SerialPartitioning>();
     zoltanParams_ = Parameters::Get<Parameters::ZoltanParams>();
     zoltanPhgEdgeSizeThreshold_ = Parameters::Get<Parameters::ZoltanPhgEdgeSizeThreshold>();
@@ -343,10 +376,8 @@ void FlowGenericVanguard::init()
             if (comm.rank() == 0)
             {
                 const auto& wells = this->schedule().getWellsatEnd();
-                for (const auto& well : wells)
-                {
-                    hasMsWell = hasMsWell || well.isMultiSegment();
-                }
+                hasMsWell = std::any_of(wells.begin(), wells.end(),
+                                        [](const auto& well) { return well.isMultiSegment(); });
             }
         }
 
@@ -368,14 +399,12 @@ void FlowGenericVanguard::init()
 
 bool FlowGenericVanguard::drsdtconEnabled() const
 {
-  for (const auto& schIt : this->schedule()) {
-      const auto& oilVaporizationControl = schIt.oilvap();
-      if (oilVaporizationControl.getType() == OilVaporizationProperties::OilVaporization::DRSDTCON) {
-          return true;
-      }
-  }
-
-  return false;
+    return std::any_of(this->schedule().begin(), this->schedule().end(),
+                       [](const auto& schIt)
+                       {
+                           return schIt.oilvap().getType() ==
+                              OilVaporizationProperties::OilVaporization::DRSDTCON;
+                       });
 }
 
 std::unordered_map<size_t, const NumericalAquiferCell*>
@@ -449,7 +478,7 @@ void FlowGenericVanguard::registerParameters_()
         ("When restarting: should we try to initialize wells and "
          "groups from historical SCHEDULE section.");
     Parameters::Register<Parameters::EdgeWeightsMethod>
-        ("Choose edge-weighing strategy: 0=uniform, 1=trans, 2=log(trans).");
+        ("Choose edge-weighing strategy: 'uniform', 'transmissibility', or 'logtrans' (logarithm of transmissibility).");
 
 #if HAVE_OPENCL || HAVE_ROCSPARSE || HAVE_CUDA
     Parameters::Register<Parameters::NumJacobiBlocks>
@@ -464,8 +493,8 @@ void FlowGenericVanguard::registerParameters_()
     Parameters::Register<Parameters::NumOverlap>
         ("Numbers of layers overlap in parallel partition");
     Parameters::Register<Parameters::PartitionMethod>
-        ("Choose partitioning strategy: 0=simple, 1=Zoltan, 2=METIS, "
-         "3=Zoltan with all cells of well represented by one vertex.");
+        ("Choose partitioning method: 'simple', 'zoltan', 'metis', or "
+         "'zoltanwell' (Zoltan with all cells perforated by a well represented by a single vertex).");
     Parameters::Register<Parameters::SerialPartitioning>
         ("Perform partitioning for parallel runs on a single process.");
     Parameters::Register<Parameters::ZoltanImbalanceTol<Scalar>>

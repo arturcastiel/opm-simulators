@@ -34,8 +34,6 @@
 
 #include <opm/models/io/restart.hpp>
 
-#include <opm/models/parallel/mpiutil.hpp>
-
 #include <opm/models/utils/basicproperties.hh>
 #include <opm/models/utils/parametersystem.hpp>
 #include <opm/models/utils/propertysystem.hh>
@@ -43,38 +41,17 @@
 #include <opm/models/utils/timer.hpp>
 #include <opm/models/utils/timerguard.hh>
 
+#include <opm/simulators/utils/DeferredLoggingErrorHelpers.hpp>
+
+#include <cassert>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
-#define EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(code)                     \
-    {                                                                   \
-        const auto& comm = Dune::MPIHelper::getCommunication();         \
-        bool exceptionThrown = false;                                   \
-        try { code; }                                                   \
-        catch (const Dune::Exception& e) {                              \
-            exceptionThrown = true;                                     \
-            std::cerr << "Process " << comm.rank() << " threw a fatal exception: " \
-                      << e.what() << ". Abort!" << std::endl;           \
-        }                                                               \
-        catch (const std::exception& e) {                               \
-            exceptionThrown = true;                                     \
-            std::cerr << "Process " << comm.rank() << " threw a fatal exception: " \
-                      << e.what() << ". Abort!" << std::endl;           \
-        }                                                               \
-        catch (...) {                                                   \
-            exceptionThrown = true;                                     \
-            std::cerr << "Process " << comm.rank() << " threw a fatal exception. " \
-                      <<" Abort!" << std::endl;                         \
-        }                                                               \
-                                                                        \
-        if (comm.max(exceptionThrown))                                  \
-            std::abort();                                               \
-    }
-
 namespace Opm {
 
+    // required as std::max is not constexpr for float128 / quads.
     template <typename T>
     static constexpr T constexpr_max(T a, T b) {
         return (a > b) ? a : b;
@@ -109,10 +86,10 @@ class Simulator
 
 public:
     // do not allow to copy simulators around
-    Simulator(const Simulator& ) = delete;
+    Simulator(const Simulator&) = delete;
 
     explicit Simulator(bool verbose = true)
-        :Simulator(Communication(), verbose)   
+        : Simulator(Communication(), verbose)
     {  
     }
 
@@ -142,117 +119,82 @@ public:
 
         finished_ = false;
 
-        if (verbose_)
+        if (verbose_) {
             std::cout << "Allocating the simulation vanguard\n" << std::flush;
+        }
 
-        int exceptionThrown = 0;
-        std::string what;
-
-        auto catchAction =
-            [&exceptionThrown, &what, comm](const std::exception& e,
-                                            bool doPrint) {
-            exceptionThrown = 1;
-            what = e.what();
-            if (comm.size() > 1) {
-                what += " (on rank " + std::to_string(comm.rank()) + ")";
-            }
-            if (doPrint)
-                std::cerr << "Rank " << comm.rank() << " threw an exception: " << e.what() << std::endl;
-        };
-
-        auto checkParallelException =
-            [comm](const std::string& prefix,
-                   int exceptionThrown_,
-                   const std::string& what_)
         {
-            if (comm.max(exceptionThrown_)) {
-                auto all_what = gatherStrings(what_);
-                assert(!all_what.empty());
-                throw std::runtime_error(prefix + all_what.front());
-            }
-        };
-
-        try
-        { vanguard_.reset(new Vanguard(*this)); }
-        catch (const std::exception& e) {
-            catchAction(e, verbose_);
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            vanguard_ = std::make_unique<Vanguard>(*this);
+            OPM_END_PARALLEL_TRY_CATCH("Allocating the simulation vanguard failed: ", comm);
         }
-        checkParallelException("Allocating the simulation vanguard failed: ",
-                               exceptionThrown, what);
 
-        // Only relevant for CpGrid
-        if (verbose_)
-            std::cout << "Adding LGRs, if any\n" << std::flush;
-
-        try
-        { vanguard_->addLgrs(); }
-        catch (const std::exception& e) {
-            catchAction(e, verbose_);
-        }
-        checkParallelException("Adding LGRs to the simulation vanguard failed: ",
-                               exceptionThrown, what);
-
-        if (verbose_)
+        if (verbose_) {
             std::cout << "Distributing the vanguard's data\n" << std::flush;
-
-        try
-        { vanguard_->loadBalance(); }
-        catch (const std::exception& e) {
-            catchAction(e, verbose_);
         }
-        checkParallelException("Could not distribute the vanguard data: ",
-                               exceptionThrown, what);
-        
 
-        if (verbose_)
+        {
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            vanguard_->loadBalance();
+            OPM_END_PARALLEL_TRY_CATCH("Could not distribute the vanguard data: ", comm);
+        }
+
+        // Only relevant for CpGrid and serial runs.
+        if (verbose_) {
+            std::cout << "Adding LGRs, if any, in serial run\n" << std::flush;
+        }
+
+        {
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            vanguard_->addLgrs();
+            OPM_END_PARALLEL_TRY_CATCH("Adding LGRs to the simulation vanguard in serial run failed: ", comm);
+        }
+
+        if (verbose_) {
             std::cout << "Allocating the model\n" << std::flush;
-        try {
-            model_.reset(new Model(*this));
         }
-        catch (const std::exception& e) {
-            catchAction(e, verbose_);
-        }
-        checkParallelException("Could not allocate model: ",
-                               exceptionThrown, what);
 
-        if (verbose_)
+        {
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            model_ = std::make_unique<Model>(*this);
+            OPM_END_PARALLEL_TRY_CATCH("Could not allocate model: ", comm);
+        }
+
+        if (verbose_) {
             std::cout << "Allocating the problem\n" << std::flush;
-
-        try {
-            problem_.reset(new Problem(*this));
         }
-        catch (const std::exception& e) {
-            catchAction(e, verbose_);
-        }
-        checkParallelException("Could not allocate the problem: ",
-                               exceptionThrown, what);
 
-        if (verbose_)
+        {
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            problem_ = std::make_unique<Problem>(*this);
+            OPM_END_PARALLEL_TRY_CATCH("Could not allocate the problem: ", comm);
+        }
+
+        if (verbose_) {
             std::cout << "Initializing the model\n" << std::flush;
-
-        try
-        { model_->finishInit(); }
-        catch (const std::exception& e) {
-            catchAction(e, verbose_);
         }
-        checkParallelException("Could not initialize the  model: ",
-                               exceptionThrown, what);
 
-        if (verbose_)
+        {
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            model_->finishInit();
+            OPM_END_PARALLEL_TRY_CATCH("Could not initialize the model: ", comm);
+        }
+
+        if (verbose_) {
             std::cout << "Initializing the problem\n" << std::flush;
-
-        try
-        { problem_->finishInit(); }
-        catch (const std::exception& e) {
-            catchAction(e, verbose_);
         }
-        checkParallelException("Could not initialize the problem: ",
-                               exceptionThrown, what);
+
+        {
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            problem_->finishInit();
+            OPM_END_PARALLEL_TRY_CATCH("Could not initialize the problem: ", comm);
+        }
 
         setupTimer_.stop();
 
-        if (verbose_)
+        if (verbose_) {
             std::cout << "Simulator successfully set up\n" << std::flush;
+        }
     }
 
     /*!
@@ -487,7 +429,7 @@ public:
     bool finished() const
     {
         assert(timeStepSize_ >= 0.0);
-        return finished_ || (this->time()*(1.0 + eps) >= endTime());
+        return finished_ || (this->time() * (1.0 + eps) >= endTime());
     }
 
     /*!
@@ -496,7 +438,7 @@ public:
      */
     bool willBeFinished() const
     {
-        return finished_ || (this->time() + timeStepSize_)*(1.0 + eps) >= endTime();
+        return finished_ || (this->time() + timeStepSize_) * (1.0 + eps) >= endTime();
     }
 
     /*!
@@ -505,8 +447,9 @@ public:
      */
     Scalar maxTimeStepSize() const
     {
-        if (finished())
+        if (finished()) {
             return 0.0;
+        }
 
         return std::min(episodeMaxTimeStepSize(),
                         std::max<Scalar>(0.0, endTime() - this->time()));
@@ -583,7 +526,7 @@ public:
      */
     bool episodeStarts() const
     {
-        return this->time() <= (episodeStartTime_ - startTime())*(1 + eps);
+        return this->time() <= (episodeStartTime_ - startTime()) * (1 + eps);
     }
 
     /*!
@@ -592,7 +535,7 @@ public:
      */
     bool episodeIsOver() const
     {
-        return this->time() >= (episodeStartTime_ - startTime() + episodeLength())*(1 - eps);
+        return this->time() >= (episodeStartTime_ - startTime() + episodeLength()) * (1 - eps);
     }
 
     /*!
@@ -602,7 +545,7 @@ public:
     bool episodeWillBeOver() const
     {
         return this->time() + timeStepSize()
-            >=  (episodeStartTime_ - startTime() + episodeLength())*(1 - eps);
+            >=  (episodeStartTime_ - startTime() + episodeLength()) * (1 - eps);
     }
 
     /*!
@@ -615,8 +558,9 @@ public:
         // wants to give it some extra time, we will return
         // the time step size it suggested instead of trying
         // to align it to the end of the episode.
-        if (episodeIsOver())
+        if (episodeIsOver()) {
             return 0.0;
+        }
 
         // make sure that we don't exceed the end of the
         // current episode.
@@ -649,14 +593,20 @@ public:
             // try to restart a previous simulation
             time_ = restartTime;
 
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
             Restart res;
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(res.deserializeBegin(*this, time_));
-            if (verbose_)
+            res.deserializeBegin(*this, time_);
+
+            if (verbose_) {
                 std::cout << "Deserialize from file '" << res.fileName() << "'\n" << std::flush;
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(this->deserialize(res));
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->deserialize(res));
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(model_->deserialize(res));
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(res.deserializeEnd());
+            }
+
+            this->deserialize(res);
+            problem_->deserialize(res);
+            model_->deserialize(res);
+            res.deserializeEnd();
+            OPM_END_PARALLEL_TRY_CATCH("Deserialization failed: ",
+                                       Dune::MPIHelper::getCommunication());
             if (verbose_)
                 std::cout << "Deserialization done."
                           << " Simulator time: " << time() << humanReadableTime(time())
@@ -666,20 +616,30 @@ public:
         }
         else {
             // if no restart is done, apply the initial solution
-            if (verbose_)
+            if (verbose_) {
                 std::cout << "Applying the initial solution of the \"" << problem_->name()
                           << "\" problem\n" << std::flush;
+            }
 
-            Scalar oldTimeStepSize = timeStepSize_;
-            int oldTimeStepIdx = timeStepIdx_;
+            const Scalar oldTimeStepSize = timeStepSize_;
+            const int oldTimeStepIdx = timeStepIdx_;
             timeStepSize_ = 0.0;
             timeStepIdx_ = -1;
 
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(model_->applyInitialSolution());
+            {
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                model_->applyInitialSolution();
+                OPM_END_PARALLEL_TRY_CATCH("Apply initial solution failed: ",
+                                           Dune::MPIHelper::getCommunication());
+            }
 
             // write initial condition
-            if (problem_->shouldWriteOutput())
-                EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->writeOutput(true));
+            if (problem_->shouldWriteOutput()) {
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                problem_->writeOutput(true);
+                OPM_END_PARALLEL_TRY_CATCH("Write output failed: ",
+                                           Dune::MPIHelper::getCommunication());
+            }
 
             timeStepSize_ = oldTimeStepSize;
             timeStepIdx_ = oldTimeStepIdx;
@@ -694,12 +654,20 @@ public:
             if (episodeBegins) {
                 // notify the problem that a new episode has just been
                 // started.
-                EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->beginEpisode());
+                {
+                    OPM_BEGIN_PARALLEL_TRY_CATCH();
+                    problem_->beginEpisode();
+                    OPM_END_PARALLEL_TRY_CATCH("Begin episode failed: ",
+                                               Dune::MPIHelper::getCommunication());
+                }
 
                 if (finished()) {
                     // the problem can chose to terminate the simulation in
                     // beginEpisode(), so we have handle this case.
-                    EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->endEpisode());
+                    OPM_BEGIN_PARALLEL_TRY_CATCH();
+                    problem_->endEpisode();
+                    OPM_END_PARALLEL_TRY_CATCH("End episode failed: ",
+                                               Dune::MPIHelper::getCommunication());
                     prePostProcessTimer_.stop();
 
                     break;
@@ -715,13 +683,21 @@ public:
             }
 
             // pre-process the current solution
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->beginTimeStep());
+            {
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                problem_->beginTimeStep();
+                OPM_END_PARALLEL_TRY_CATCH("Begin timestep failed: ",
+                                            Dune::MPIHelper::getCommunication());
+            }
 
             if (finished()) {
-                // the problem can chose to terminate the simulation in
+                // the problem can choose to terminate the simulation in
                 // beginTimeStep(), so we have handle this case.
-                EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->endTimeStep());
-                EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->endEpisode());
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                problem_->endTimeStep();
+                problem_->endEpisode();
+                OPM_END_PARALLEL_TRY_CATCH("Finish failed: ",
+                                            Dune::MPIHelper::getCommunication());
                 prePostProcessTimer_.stop();
 
                 break;
@@ -735,35 +711,49 @@ public:
             catch (...) {
                 // exceptions in the time integration might be recoverable. clean up in
                 // case they are
-                const auto& model = problem_->model();
-                prePostProcessTimer_ += model.prePostProcessTimer();
-                linearizeTimer_ += model.linearizeTimer();
-                solveTimer_ += model.solveTimer();
-                updateTimer_ += model.updateTimer();
+                const auto& pmodel = problem_->model();
+                prePostProcessTimer_ += pmodel.prePostProcessTimer();
+                linearizeTimer_ += pmodel.linearizeTimer();
+                solveTimer_ += pmodel.solveTimer();
+                updateTimer_ += pmodel.updateTimer();
 
                 throw;
             }
 
-            const auto& model = problem_->model();
-            prePostProcessTimer_ += model.prePostProcessTimer();
-            linearizeTimer_ += model.linearizeTimer();
-            solveTimer_ += model.solveTimer();
-            updateTimer_ += model.updateTimer();
+            const auto& pmodel = problem_->model();
+            prePostProcessTimer_ += pmodel.prePostProcessTimer();
+            linearizeTimer_ += pmodel.linearizeTimer();
+            solveTimer_ += pmodel.solveTimer();
+            updateTimer_ += pmodel.updateTimer();
 
             // post-process the current solution
             prePostProcessTimer_.start();
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->endTimeStep());
+            {
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                problem_->endTimeStep();
+                OPM_END_PARALLEL_TRY_CATCH("End timestep failed: ",
+                                            Dune::MPIHelper::getCommunication());
+            }
             prePostProcessTimer_.stop();
 
             // write the result to disk
             writeTimer_.start();
-            if (problem_->shouldWriteOutput())
-                EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->writeOutput(true));
+            if (problem_->shouldWriteOutput()) {
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                problem_->writeOutput(true);
+                OPM_END_PARALLEL_TRY_CATCH("Write output failed: ",
+                                            Dune::MPIHelper::getCommunication());
+            }
             writeTimer_.stop();
 
             // do the next time integration
-            Scalar oldDt = timeStepSize();
-            EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->advanceTimeLevel());
+            const Scalar oldDt = timeStepSize();
+            {
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                problem_->advanceTimeLevel();
+                OPM_END_PARALLEL_TRY_CATCH("Advance time level failed: ",
+                                            Dune::MPIHelper::getCommunication());
+            }
 
             if (verbose_) {
                 std::cout << "Time step " << timeStepIndex() + 1 << " done. "
@@ -781,17 +771,22 @@ public:
             // notify the problem if an episode is finished
             if (episodeIsOver()) {
                 // Notify the problem about the end of the current episode...
-                EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->endEpisode());
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                problem_->endEpisode();
+                OPM_END_PARALLEL_TRY_CATCH("End episode failed: ",
+                                            Dune::MPIHelper::getCommunication());
                 episodeBegins = true;
             }
             else {
                 Scalar dt;
-                if (timeStepIdx_ < static_cast<int>(forcedTimeSteps_.size()))
+                if (timeStepIdx_ < static_cast<int>(forcedTimeSteps_.size())) {
                     // use the next time step size from the input file
                     dt = forcedTimeSteps_[timeStepIdx_];
-                else
+                }
+                else {
                     // ask the problem to provide the next time step size
                     dt = std::min(maxTimeStepSize(), problem_->nextTimeStepSize());
+                }
                 assert(finished() || dt > 0);
                 setTimeStepSize(dt);
             }
@@ -799,13 +794,22 @@ public:
 
             // write restart file if mandated by the problem
             writeTimer_.start();
-            if (problem_->shouldWriteRestartFile())
-                EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(serialize());
+            if (problem_->shouldWriteRestartFile()) {
+                OPM_BEGIN_PARALLEL_TRY_CATCH();
+                serialize();
+                OPM_END_PARALLEL_TRY_CATCH("Serialize failed: ",
+                                            Dune::MPIHelper::getCommunication());
+            }
             writeTimer_.stop();
         }
         executionTimer_.stop();
 
-        EWOMS_CATCH_PARALLEL_EXCEPTIONS_FATAL(problem_->finalize());
+        {
+            OPM_BEGIN_PARALLEL_TRY_CATCH();
+            problem_->finalize();
+            OPM_END_PARALLEL_TRY_CATCH("Finalize failed: ",
+                                        Dune::MPIHelper::getCommunication());
+        }
     }
 
     /*!
@@ -827,10 +831,11 @@ public:
         using Restarter = Restart;
         Restarter res;
         res.serializeBegin(*this);
-        if (gridView().comm().rank() == 0)
+        if (gridView().comm().rank() == 0) {
             std::cout << "Serialize to file '" << res.fileName() << "'"
                       << ", next time step size: " << timeStepSize()
                       << "\n" << std::flush;
+        }
 
         this->serialize(res);
         problem_->serialize(res);

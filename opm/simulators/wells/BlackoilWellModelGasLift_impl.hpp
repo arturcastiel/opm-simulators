@@ -118,9 +118,10 @@ maybeDoGasLiftOptimize(const Simulator& simulator,
         if constexpr (glift_debug) {
             std::vector<WellInterfaceGeneric<Scalar>*> wc;
             wc.reserve(well_container.size());
-            for (const auto& w : well_container) {
-                wc.push_back(static_cast<WellInterfaceGeneric<Scalar>*>(w.get()));
-            }
+            std::transform(well_container.begin(), well_container.end(),
+                           std::back_inserter(wc),
+                           [](const auto& w)
+                           { return static_cast<WellInterfaceGeneric<Scalar>*>(w.get()); });
             this->gliftDebugShowALQ(wc,
                                     wellState,
                                     deferred_logger);
@@ -228,7 +229,7 @@ gasLiftOptimizationStage1(const Simulator& simulator,
             }
 #if HAVE_MPI
             Parallel::MpiSerializer ser(comm);
-            ser.broadcast(i, group_indexes, group_oil_rates,
+            ser.broadcast(Parallel::RootRank{i}, group_indexes, group_oil_rates,
                           group_gas_rates, group_water_rates, group_alq_rates);
 #endif
             if (comm.rank() != i) {

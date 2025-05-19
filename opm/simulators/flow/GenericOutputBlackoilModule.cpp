@@ -30,7 +30,7 @@
 
 #include <opm/material/fluidmatrixinteractions/EclHysteresisConfig.hpp>
 #include <opm/material/fluidsystems/BlackOilFluidSystem.hpp>
-#include <opm/material/fluidsystems/BlackOilDefaultIndexTraits.hpp>
+#include <opm/material/fluidsystems/BlackOilDefaultFluidSystemIndices.hpp>
 #include <opm/material/fluidsystems/GenericOilGasWaterFluidSystem.hpp>
 
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
@@ -76,12 +76,13 @@ namespace {
     defineInterRegionFlowArrays(const Opm::EclipseState&  eclState,
                                 const Opm::SummaryConfig& summaryConfig)
     {
-        auto regions = std::vector<Opm::InterRegFlowMap::SingleRegion>{};
-
-        const auto& fprops = eclState.fieldProps();
-        for (const auto& arrayName : summaryConfig.fip_regions_interreg_flow()) {
-            regions.push_back({ arrayName, std::cref(fprops.get_int(arrayName)) });
-        }
+        using SRegion = Opm::InterRegFlowMap::SingleRegion;
+        auto regions = std::vector<SRegion>{};
+        const auto fip_regions = summaryConfig.fip_regions_interreg_flow();
+        std::transform(fip_regions.begin(), fip_regions.end(),
+                       std::back_inserter(regions),
+                       [&fprops = eclState.fieldProps()](const auto& arrayName)
+                       { return SRegion{arrayName, std::cref(fprops.get_int(arrayName))}; });
 
         return regions;
     }
@@ -156,7 +157,7 @@ GenericOutputBlackoilModule(const EclipseState& eclState,
     , flowsC_(schedule, summaryConfig)
     , rftC_(eclState_, schedule_,
             [this](const std::string& wname)
-            { return !isDefunctParallelWell(wname); })
+            { return this->isOwnedByCurrentRank(wname); })
     , rst_conv_(std::move(globalCell), comm)
     , local_data_valid_(false)
 {
@@ -1200,7 +1201,7 @@ assignGlobalFieldsToSolution(data::Solution& sol)
     this->rst_conv_.outputRestart(sol);
 }
 
-template<class T> using FS = BlackOilFluidSystem<T,BlackOilDefaultIndexTraits>;
+template<class T> using FS = BlackOilFluidSystem<T, BlackOilDefaultFluidSystemIndices>;
 
 #define INSTANTIATE_TYPE(T) \
     template class GenericOutputBlackoilModule<FS<T>>;

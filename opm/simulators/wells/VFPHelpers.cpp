@@ -21,6 +21,7 @@
 #include <opm/simulators/wells/VFPHelpers.hpp>
 
 #include <opm/common/ErrorMacros.hpp>
+#include <opm/common/Exceptions.hpp>
 
 #include <opm/material/densead/Evaluation.hpp>
 #include <opm/material/densead/Math.hpp>
@@ -368,6 +369,9 @@ findTHP(const std::vector<Scalar>& bhp_array,
 {
     int nthp = thp_array.size();
 
+    if (std::isnan(bhp)) {
+        throw NumericalProblem("findTHP: Error bhp is nan");
+    }
     Scalar thp = -1e100;
 
     //Check that our thp axis is sorted
@@ -551,10 +555,12 @@ intersectWithIPR(const VFPProdTable& table,
                  const std::function<Scalar(const Scalar)>& adjust_bhp)
 {
     // Given fixed thp, wfr, gfr and alq, this function finds a stable (-flo, bhp)-intersection
-    // between the ipr-line and bhp(flo) if such an intersection exists. For multiple stable
-    // intersections, the one corresponding the largest flo is returned.
+    // between the ipr-line and bhp(flo) from table, if such an intersection exists. For multiple 
+    // stable intersections, the one corresponding the largest flo is returned as long as this intersection
+    // lies within the tabulated values. If the ipr-line lies above all (flo, bhp) points, the intersection
+    // is determined by extrapolation based on the last two points. 
     // The adjust_bhp-function is used to adjust the vfp-table bhp-values to actual bhp-values due
-    // vfp/well ref-depth differences and/or WVFPDP-related pressure adjustments.
+    // to vfp/well ref-depth differences and/or WVFPDP-related pressure adjustments.
 
     // NOTE: ipr-line is q=b*bhp - a!
     // ipr is given for negative flo, so
@@ -591,8 +597,17 @@ intersectWithIPR(const VFPProdTable& table,
             w = std::clamp(w, Scalar{0.0}, Scalar{1.0}); // just to be safe (if y0~y1~0)
             flo_x = flo0 + w*(flo1 - flo0);
         }
-        flo0 = flo1;
-        y0 = y1;
+        if (i < flos.size()-1) { // check next interval
+            flo0 = flo1;
+            y0 = y1;
+        } else if (y1 < 0 && y0 < y1 && flo_x < 0) { // at last interval
+            // If y0 < y1 < 0, there is a stable intersection above the largest flo-value by 
+            // extrapolation. If no previous stable intersections were found, i.e., ipr-line lies 
+            // above all (flo, bhp) points, then we return this intersection. Otherwise, we don't 
+            // trust it (avoid vfp-extrapolation whenever possible)
+            Scalar w = -y0/(y1-y0); // w > 1.0
+            flo_x = flo0 + w*(flo1 - flo0);
+        }
     }
     // return (last) intersection if found (negative flo)
     if (flo_x >= 0) {

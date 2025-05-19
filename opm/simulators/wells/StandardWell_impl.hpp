@@ -158,7 +158,7 @@ namespace Opm
         Value skin_pressure = zeroElem();
         if (has_polymermw) {
             if (this->isInjector()) {
-                const int pskin_index = Bhp + 1 + this->numPerfs() + perf;
+                const int pskin_index = Bhp + 1 + this->numLocalPerfs() + perf;
                 skin_pressure = obtainN(this->primary_variables_.eval(pskin_index));
             }
         }
@@ -186,6 +186,8 @@ namespace Opm
                         perf_rates,
                         deferred_logger);
     }
+
+
 
     template<typename TypeTag>
     template<class Value>
@@ -642,6 +644,13 @@ namespace Opm
             const Scalar rho = FluidSystem::referenceDensity( FluidSystem::gasPhaseIdx, Base::pvtRegionIdx() );
             perf_data.gas_mass_rates[perf] = cq_s[gas_comp_idx].value() * rho;
         }
+
+        // Store the perforation water mass rate.
+        if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+            const unsigned wat_comp_idx = Indices::canonicalToActiveComponentIndex(FluidSystem::waterCompIdx);
+            const Scalar rho = FluidSystem::referenceDensity( FluidSystem::waterPhaseIdx, Base::pvtRegionIdx() );
+            perf_data.wat_mass_rates[perf] = cq_s[wat_comp_idx].value() * rho;
+        }
     }
 
 
@@ -1092,42 +1101,6 @@ namespace Opm
 
         return all_drawdown_wrong_direction;
     }
-
-
-
-
-    template<typename TypeTag>
-    bool
-    StandardWell<TypeTag>::
-    canProduceInjectWithCurrentBhp(const Simulator& simulator,
-                                   const WellState<Scalar>& well_state,
-                                   DeferredLogger& deferred_logger)
-    {
-        const Scalar bhp = well_state.well(this->index_of_well_).bhp;
-        std::vector<Scalar> well_rates;
-        computeWellRatesWithBhp(simulator, bhp, well_rates, deferred_logger);
-
-        const Scalar sign = (this->isProducer()) ? -1. : 1.;
-        const Scalar threshold = sign * std::numeric_limits<Scalar>::min();
-
-        bool can_produce_inject = false;
-        for (const auto value : well_rates) {
-            if (this->isProducer() && value < threshold) {
-                can_produce_inject = true;
-                break;
-            } else if (this->isInjector() && value > threshold) {
-                can_produce_inject = true;
-                break;
-            }
-        }
-
-        if (!can_produce_inject) {
-            deferred_logger.debug(" well " + name() + " CANNOT produce or inejct ");
-        }
-
-        return can_produce_inject;
-    }
-
 
 
 
@@ -2351,6 +2324,8 @@ namespace Opm
                              const GroupState<Scalar>& group_state,
                              DeferredLogger& deferred_logger)
     {
+        updatePrimaryVariables(simulator, well_state, deferred_logger);
+
         const int max_iter = this->param_.max_inner_iter_wells_;
         int it = 0;
         bool converged;
@@ -2398,6 +2373,8 @@ namespace Opm
                                const bool fixed_control /*false*/,
                                const bool fixed_status /*false*/)
     {
+        updatePrimaryVariables(simulator, well_state, deferred_logger);
+
         const int max_iter = this->param_.max_inner_iter_wells_;
         int it = 0;
         bool converged = false;

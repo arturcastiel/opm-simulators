@@ -28,34 +28,35 @@
 #ifndef EWOMS_BLACK_OIL_INTENSIVE_QUANTITIES_HH
 #define EWOMS_BLACK_OIL_INTENSIVE_QUANTITIES_HH
 
-#include "blackoilproperties.hh"
-#include "blackoilsolventmodules.hh"
-#include "blackoilextbomodules.hh"
-#include "blackoilpolymermodules.hh"
-#include "blackoilfoammodules.hh"
-#include "blackoilbrinemodules.hh"
-#include "blackoilenergymodules.hh"
-#include "blackoildiffusionmodule.hh"
-#include "blackoildispersionmodule.hh"
-#include "blackoilmicpmodules.hh"
-#include "blackoilconvectivemixingmodule.hh"
+#include <dune/common/fmatrix.hh>
 
 #include <opm/common/TimingMacros.hpp>
-#include <opm/common/OpmLog/OpmLog.hpp>
 
 #include <opm/input/eclipse/EclipseState/Grid/FaceDir.hpp>
 
 #include <opm/material/fluidstates/BlackOilFluidState.hpp>
 #include <opm/material/common/Valgrind.hpp>
 
+#include <opm/models/blackoil/blackoilbrinemodules.hh>
+#include <opm/models/blackoil/blackoilconvectivemixingmodule.hh>
+#include <opm/models/blackoil/blackoildiffusionmodule.hh>
+#include <opm/models/blackoil/blackoildispersionmodule.hh>
+#include <opm/models/blackoil/blackoilenergymodules.hh>
+#include <opm/models/blackoil/blackoilextbomodules.hh>
+#include <opm/models/blackoil/blackoilfoammodules.hh>
+#include <opm/models/blackoil/blackoilmicpmodules.hh>
+#include <opm/models/blackoil/blackoilpolymermodules.hh>
+#include <opm/models/blackoil/blackoilproperties.hh>
+#include <opm/models/blackoil/blackoilsolventmodules.hh>
 #include <opm/models/common/directionalmobility.hh>
 
 #include <opm/utility/CopyablePtr.hpp>
 
-#include <dune/common/fmatrix.hh>
-
+#include <array>
 #include <cstring>
+#include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace Opm {
 /*!
@@ -130,7 +131,7 @@ class BlackOilIntensiveQuantities
     using DiffusionIntensiveQuantities = BlackOilDiffusionIntensiveQuantities<TypeTag, enableDiffusion>;
     using DispersionIntensiveQuantities = BlackOilDispersionIntensiveQuantities<TypeTag, enableDispersion>;
 
-    using DirectionalMobilityPtr = Opm::Utility::CopyablePtr<DirectionalMobility<TypeTag, Evaluation>>;
+    using DirectionalMobilityPtr = Utility::CopyablePtr<DirectionalMobility<TypeTag>>;
     using BrineModule = BlackOilBrineModule<TypeTag>;
     using BrineIntQua = BlackOilBrineIntensiveQuantities<TypeTag, enableSaltPrecipitation>;
     using MICPIntQua = BlackOilMICPIntensiveQuantities<TypeTag, enableMICP>;
@@ -646,16 +647,16 @@ public:
     {
         using Dir = FaceDir::DirEnum;
         if (dirMob_) {
-            switch(facedir) {
+            switch (facedir) {
                 case Dir::XMinus:
                 case Dir::XPlus:
-                    return dirMob_->mobilityX_[phaseIdx];
+                    return dirMob_->getArray(0)[phaseIdx];
                 case Dir::YMinus:
                 case Dir::YPlus:
-                    return dirMob_->mobilityY_[phaseIdx];
+                    return dirMob_->getArray(1)[phaseIdx];
                 case Dir::ZMinus:
                 case Dir::ZPlus:
-                    return dirMob_->mobilityZ_[phaseIdx];
+                    return dirMob_->getArray(2)[phaseIdx];
                 default:
                     throw std::runtime_error("Unexpected face direction");
             }

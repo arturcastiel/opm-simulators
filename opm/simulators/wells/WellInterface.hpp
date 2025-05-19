@@ -269,12 +269,6 @@ public:
                                          WellState<Scalar>& well_state,
                                          DeferredLogger& deferred_logger) const = 0;
 
-    /// \brief Wether the Jacobian will also have well contributions in it.
-    virtual bool jacobianContainsWellContributions() const
-    {
-        return false;
-    }
-
     // Add well contributions to matrix
     virtual void addWellContributions(SparseMatrixAdapter&) const = 0;
 
@@ -303,12 +297,6 @@ public:
     void checkWellOperability(const Simulator& simulator,
                               const WellState<Scalar>& well_state,
                               DeferredLogger& deferred_logger);
-
-    bool gliftBeginTimeStepWellTestIterateWellEquations(const Simulator& ebos_simulator,
-                                                        const double dt,
-                                                        WellState<Scalar>& well_state,
-                                                        const GroupState<Scalar>& group_state,
-                                                        DeferredLogger& deferred_logger);
 
     void gliftBeginTimeStepWellTestUpdateALQ(const Simulator& simulator,
                                              WellState<Scalar>& well_state,
@@ -339,10 +327,10 @@ public:
 
     /// Modify the well_state's rates if there is only one nonzero rate.
     /// If so, that rate is kept as is, but the others are set proportionally
-    /// to the rates returned by computeCurrentWellRates().
-    void updateWellStateRates(const Simulator& simulator,
-                              WellState<Scalar>& well_state,
-                              DeferredLogger& deferred_logger) const;
+    /// to the rates at bhp limit or bhp 1 bar.
+    void initializeProducerWellState(const Simulator& simulator,
+                                     WellState<Scalar>& well_state,
+                                     DeferredLogger& deferred_logger) const;
 
     void solveWellEquation(const Simulator& simulator,
                            WellState<Scalar>& well_state,
@@ -372,7 +360,7 @@ public:
                                             WellState<Scalar>& well_state,
                                             const GroupState<Scalar>& group_state,
                                             DeferredLogger& deferred_logger, 
-                                            const bool fixed_control = false, 
+                                            const bool fixed_control = false,
                                             const bool fixed_status = false) = 0;
 protected:
     // simulation parameters
@@ -389,9 +377,6 @@ protected:
     Scalar wurea() const;
 
     virtual Scalar getRefDensity() const = 0;
-
-    // Component fractions for each phase for the well
-    const std::vector<Scalar>& compFrac() const;
 
     std::vector<Scalar>
     initialWellRateFractions(const Simulator& ebosSimulator,
@@ -482,7 +467,7 @@ protected:
     // get the mobility for specific perforation
     template<class Value, class Callback>
     void getMobility(const Simulator& simulator,
-                     const int perf,
+                     const int local_perf_index,
                      std::vector<Value>& mob,
                      Callback& extendEval,
                      [[maybe_unused]] DeferredLogger& deferred_logger) const;

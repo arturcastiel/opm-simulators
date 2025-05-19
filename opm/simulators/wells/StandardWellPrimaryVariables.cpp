@@ -31,7 +31,7 @@
 #include <opm/material/densead/Evaluation.hpp>
 #include <opm/material/fluidsystems/BlackOilFluidSystem.hpp>
 
-#include <opm/models/blackoil/blackoilindices.hh>
+#include <opm/models/blackoil/blackoilvariableandequationindices.hh>
 #include <opm/models/blackoil/blackoilonephaseindices.hh>
 #include <opm/models/blackoil/blackoiltwophaseindices.hh>
 
@@ -163,7 +163,17 @@ update(const WellState<Scalar>& well_state,
             }
     }
 
-    if (std::abs(total_well_rate) > 0.) {
+    if (ws.primaryvar.size() > 0) {
+        if constexpr (has_wfrac_variable) {
+             value_[WFrac] = ws.primaryvar[WFrac];
+        }
+        if constexpr (has_gfrac_variable) {
+             value_[GFrac] = ws.primaryvar[GFrac];
+        }
+        if constexpr (Indices::enableSolvent) {
+            value_[SFrac] = ws.primaryvar[SFrac];
+         }
+    } else if (std::abs(total_well_rate) > 0.) {
         if constexpr (has_wfrac_variable) {
             value_[WFrac] = well_.scalingFactor(pu.phase_pos[Water]) * ws.surface_rates[pu.phase_pos[Water]] / total_well_rate;
         }
@@ -175,7 +185,6 @@ update(const WellState<Scalar>& well_state,
         if constexpr (Indices::enableSolvent) {
             value_[SFrac] = well_.scalingFactor(Indices::contiSolventEqIdx) * ws.sum_solvent_rates() / total_well_rate ;
         }
-
     } else { // total_well_rate == 0
         if (well_.isInjector()) {
             // only single phase injection handled
@@ -235,9 +244,9 @@ updatePolyMW(const WellState<Scalar>& well_state)
         const auto& perf_data = ws.perf_data;
         const auto& water_velocity = perf_data.water_velocity;
         const auto& skin_pressure = perf_data.skin_pressure;
-        for (int perf = 0; perf < well_.numPerfs(); ++perf) {
+        for (int perf = 0; perf < well_.numLocalPerfs(); ++perf) {
             value_[Bhp + 1 + perf] = water_velocity[perf];
-            value_[Bhp + 1 + well_.numPerfs() + perf] = skin_pressure[perf];
+            value_[Bhp + 1 + well_.numLocalPerfs() + perf] = skin_pressure[perf];
         }
     }
     setEvaluationsFromValues();
@@ -311,9 +320,9 @@ void StandardWellPrimaryVariables<FluidSystem,Indices>::
 updateNewtonPolyMW(const BVectorWell& dwells)
 {
     if (well_.isInjector()) {
-        for (int perf = 0; perf < well_.numPerfs(); ++perf) {
+        for (int perf = 0; perf < well_.numLocalPerfs(); ++perf) {
             const int wat_vel_index = Bhp + 1 + perf;
-            const int pskin_index = Bhp + 1 + well_.numPerfs() + perf;
+            const int pskin_index = Bhp + 1 + well_.numLocalPerfs() + perf;
 
             const Scalar relaxation_factor = 0.9;
             const Scalar dx_wat_vel = dwells[0][wat_vel_index];
@@ -399,6 +408,7 @@ copyToWellState(WellState<Scalar>& well_state,
     }
 
     auto& ws = well_state.well(well_.indexOfWell());
+    ws.primaryvar = value_;
     ws.bhp = value_[Bhp];
 
     // calculate the phase rates based on the primary variables
@@ -440,9 +450,9 @@ copyToWellStatePolyMW(WellState<Scalar>& well_state) const
         auto& perf_data = ws.perf_data;
         auto& perf_water_velocity = perf_data.water_velocity;
         auto& perf_skin_pressure = perf_data.skin_pressure;
-        for (int perf = 0; perf < well_.numPerfs(); ++perf) {
+        for (int perf = 0; perf < well_.numLocalPerfs(); ++perf) {
             perf_water_velocity[perf] = value_[Bhp + 1 + perf];
-            perf_skin_pressure[perf] = value_[Bhp + 1 + well_.numPerfs() + perf];
+            perf_skin_pressure[perf] = value_[Bhp + 1 + well_.numLocalPerfs() + perf];
         }
     }
 }
@@ -731,43 +741,12 @@ checkFinite(DeferredLogger& deferred_logger) const
     }
 }
 
-template<class Scalar>
-using FS = BlackOilFluidSystem<Scalar,BlackOilDefaultIndexTraits>;
+#include <opm/simulators/utils/InstantiationIndicesMacros.hpp>
 
-#define INSTANTIATE(T,...) \
-    template class StandardWellPrimaryVariables<FS<T>,__VA_ARGS__>;
-
-#define INSTANTIATE_TYPE(T)                                                  \
-    INSTANTIATE(T,BlackOilOnePhaseIndices<0u,0u,0u,0u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilOnePhaseIndices<0u,0u,0u,1u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilOnePhaseIndices<0u,0u,0u,0u,false,false,0u,1u,5u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,false,0u,0u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,false,0u,2u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,1u,0u,false,false,0u,2u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,1u,0u,false,true,0u,2u,0u>)  \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,1u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,true,0u,0u,0u>)  \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,true,0u,2u,0u>)  \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,2u,0u,false,false,0u,2u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,1u,false,false,0u,0u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,1u,false,true,0u,0u,0u>)  \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<1u,0u,0u,0u,false,false,0u,0u,0u>) \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<1u,0u,0u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,1u,0u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,1u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,1u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,true,false,0u,0u>)             \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,false,true,0u,0u>)             \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,1u,false,true,0u,0u>)             \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,1u,false,false,1u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<1u,0u,0u,0u,true,false,0u,0u>)
-
-INSTANTIATE_TYPE(double)
+INSTANTIATE_TYPE_INDICES(StandardWellPrimaryVariables, double)
 
 #if FLOW_INSTANTIATE_FLOAT
-INSTANTIATE_TYPE(float)
+INSTANTIATE_TYPE_INDICES(StandardWellPrimaryVariables, float)
 #endif
 
 }

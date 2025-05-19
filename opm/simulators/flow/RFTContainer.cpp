@@ -30,7 +30,7 @@
 #include <opm/input/eclipse/Schedule/Schedule.hpp>
 #include <opm/input/eclipse/Schedule/Well/WellConnections.hpp>
 
-#include <opm/material/fluidsystems/BlackOilDefaultIndexTraits.hpp>
+#include <opm/material/fluidsystems/BlackOilDefaultFluidSystemIndices.hpp>
 #include <opm/material/fluidsystems/BlackOilFluidSystem.hpp>
 #include <opm/material/fluidsystems/GenericOilGasWaterFluidSystem.hpp>
 
@@ -85,29 +85,27 @@ addToWells(data::Wells& wellDatas,
         gatherAndUpdateMap(gasConnectionSaturations_, comm);
     }
 
-    for (const auto& well: schedule_.getWells(reportStepNum)) {
-
-        // don't bother with wells not on this process
-        if (!wellQuery_(well.name())) {
+    for (const auto& wname : this->schedule_.wellNames(reportStepNum)) {
+        // Don't bother with wells not on this process.
+        if (!wellQuery_(wname)) {
             continue;
         }
 
-        //add data infrastructure for shut wells
-        if (!wellDatas.count(well.name())) {
-            auto& wellData = wellDatas[well.name()];
-            wellData.connections.reserve(well.getConnections().size());
-            std::transform(well.getConnections().begin(),
-                           well.getConnections().end(),
-                           std::back_inserter(wellData.connections),
-                           [](const auto& connection)
-                           {
-                               data::Connection res;
-                               res.index = connection.global_index();
-                               return res;
-                           });
-        }
+        const auto& [wellDataPos, inserted] = wellDatas.try_emplace(wname);
 
-        data::Well& wellData = wellDatas.at(well.name());
+        if (inserted) {
+            // New well.  Typically a shut/inactive one.  Allocate
+            // data::Connection result objects for this well.
+            const auto& conns = this->schedule_[reportStepNum]
+                .wells(wname).getConnections();
+
+            auto& xcon = wellDataPos->second.connections;
+
+            xcon.reserve(conns.size());
+            for (const auto& conn : conns) {
+                xcon.emplace_back().index = conn.global_index();
+            }
+        }
 
         auto cond_assign = [](double& dest, unsigned idx, const auto& map)
         {
@@ -117,7 +115,8 @@ addToWells(data::Wells& wellDatas,
             }
         };
 
-        std::for_each(wellData.connections.begin(), wellData.connections.end(),
+        std::for_each(wellDataPos->second.connections.begin(),
+                      wellDataPos->second.connections.end(),
                       [&cond_assign, this](auto& connectionData)
                       {
                           const auto index = connectionData.index;
@@ -190,7 +189,7 @@ assign(const unsigned cartesianIndex,
     cond_assign(gasConnectionSaturations_, cartesianIndex, gas);
 }
 
-template<class T> using FS = BlackOilFluidSystem<T,BlackOilDefaultIndexTraits>;
+template<class T> using FS = BlackOilFluidSystem<T, BlackOilDefaultFluidSystemIndices>;
 
 #define INSTANTIATE_TYPE(T) \
     template class RFTContainer<FS<T>>;

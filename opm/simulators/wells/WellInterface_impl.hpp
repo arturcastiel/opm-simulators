@@ -209,21 +209,20 @@ namespace Opm
         } else {
             from = WellProducerCMode2String(ws.production_cmode);
         }
-        bool oscillating = std::count(this->well_control_log_.begin(), this->well_control_log_.end(), from) >= this->param_.max_number_of_well_switches_;
+
         const int episodeIdx = simulator.episodeIndex();
         const int iterationIdx = simulator.model().newtonMethod().numIterations();
         const int nupcol = schedule[episodeIdx].nupcol();
-        if (oscillating && iterationIdx > nupcol) {
-            // only output frist time
-            bool output = std::count(this->well_control_log_.begin(), this->well_control_log_.end(), from) == this->param_.max_number_of_well_switches_;
+        const bool oscillating = std::count(this->well_control_log_.begin(), this->well_control_log_.end(), from) >= this->param_.max_number_of_well_switches_;
+        if (oscillating) {
+            // only output first time
+            const bool output = std::count(this->well_control_log_.begin(), this->well_control_log_.end(), from) == this->param_.max_number_of_well_switches_;
             if (output) {
-                std::ostringstream ss;
-                ss << "    The control mode for well " << this->name()
-                   << " is oscillating\n"
-                   << "    We don't allow for more than "
-                   << this->param_.max_number_of_well_switches_
-                   << " switches. The control is kept at " << from;
-                deferred_logger.info(ss.str());
+                const auto msg = fmt::format("    The control mode for well {} is oscillating. \n"
+                    "We don't allow for more than {} switches after NUPCOL iterations. (NUPCOL = {}) \n"
+                    "The control is kept at {}.",
+                    this->name(), this->param_.max_number_of_well_switches_, nupcol, from);
+                deferred_logger.info(msg);
                 // add one more to avoid outputting the same info again
                 this->well_control_log_.push_back(from);
             }
@@ -256,7 +255,12 @@ namespace Opm
             }
             deferred_logger.debug(ss.str());
 
-            this->well_control_log_.push_back(from);
+            // We always store the current control as it is used for output
+            // and only after iteration >= nupcol
+            // we log all switches to check if the well controls oscillates
+            if (iterationIdx >= nupcol || this->well_control_log_.empty()) {
+                this->well_control_log_.push_back(from);
+            }
             updateWellStateWithTarget(simulator, group_state, well_state, deferred_logger);
             updatePrimaryVariables(simulator, well_state, deferred_logger);
         }
@@ -288,7 +292,6 @@ namespace Opm
             from = WellProducerCMode2String(ws.production_cmode);
         }
         const bool oscillating = std::count(this->well_control_log_.begin(), this->well_control_log_.end(), from) >= this->param_.max_number_of_well_switches_;
-
         if (oscillating || this->wellUnderZeroRateTarget(simulator, well_state, deferred_logger) || !(this->well_ecl_.getStatus() == WellStatus::OPEN)) {
            return false;
         }
@@ -508,6 +511,9 @@ namespace Opm
         const auto& summary_state = simulator.vanguard().summaryState();
         const auto inj_controls = this->well_ecl_.isInjector() ? this->well_ecl_.injectionControls(summary_state) : Well::InjectionControls(0);
         const auto prod_controls = this->well_ecl_.isProducer() ? this->well_ecl_.productionControls(summary_state) : Well::ProductionControls(0);
+        const auto& ws = well_state.well(this->indexOfWell());
+        const auto pmode_orig = ws.production_cmode;
+        const auto imode_orig = ws.injection_cmode;
         bool converged = false;
         try {
             // TODO: the following two functions will be refactored to be one to reduce the code duplication
@@ -526,6 +532,32 @@ namespace Opm
             deferred_logger.warning("INNER_ITERATION_FAILED", msg);
             converged = false;
         }
+        if (converged) {
+            // Add debug info for switched controls
+            if (ws.production_cmode != pmode_orig || ws.injection_cmode != imode_orig) {
+                std::string from,to;
+                if (this->isInjector()) {
+                    from = WellInjectorCMode2String(imode_orig);
+                    to = WellInjectorCMode2String(ws.injection_cmode);
+                } else {
+                    from = WellProducerCMode2String(pmode_orig);
+                    to = WellProducerCMode2String(ws.production_cmode);
+                }
+                const auto msg = fmt::format("    Well {} switched from {} to {} during local solve", this->name(), from, to);
+                deferred_logger.debug(msg);
+                const int episodeIdx = simulator.episodeIndex();
+                const int iterationIdx = simulator.model().newtonMethod().numIterations();
+                const auto& schedule = simulator.vanguard().schedule();
+                const int nupcol = schedule[episodeIdx].nupcol();
+                // We always store the current control as it is used for output
+                // and only after iteration >= nupcol
+                // we log all switches to check if the well controls oscillates
+                if (iterationIdx >= nupcol || this->well_control_log_.empty()) {
+                    this->well_control_log_.push_back(from);
+                }
+            }
+        }
+
         return converged;
     }
 
@@ -762,13 +794,17 @@ namespace Opm
                 thp_control = ws.injection_cmode == Well::InjectorCMode::THP;
                 if (thp_control) {
                     ws.injection_cmode = Well::InjectorCMode::BHP;
-                    this->well_control_log_.push_back(WellInjectorCMode2String(Well::InjectorCMode::THP));
+                    if (this->well_control_log_.empty()) { // only log the first control
+                        this->well_control_log_.push_back(WellInjectorCMode2String(Well::InjectorCMode::THP));
+                    }
                 }
             } else {
                 thp_control = ws.production_cmode == Well::ProducerCMode::THP;
                 if (thp_control) {
                     ws.production_cmode = Well::ProducerCMode::BHP;
-                    this->well_control_log_.push_back(WellProducerCMode2String(Well::ProducerCMode::THP));
+                    if (this->well_control_log_.empty()) { // only log the first control
+                        this->well_control_log_.push_back(WellProducerCMode2String(Well::ProducerCMode::THP));
+                    }
                 }
             }
             if (thp_control) {
@@ -844,9 +880,6 @@ namespace Opm
         const int iteration_idx = simulator.model().newtonMethod().numIterations();
         if (iteration_idx < this->param_.max_niter_inner_well_iter_ || this->well_ecl_.isMultiSegment()) {
             const auto& ws = well_state.well(this->indexOfWell());
-            const auto pmode_orig = ws.production_cmode;
-            const auto imode_orig = ws.injection_cmode;
-
             const bool nonzero_rate_original =
                 std::any_of(ws.surface_rates.begin(),
                             ws.surface_rates.begin() + well_state.numPhases(),
@@ -865,19 +898,6 @@ namespace Opm
                     this->openWell();
                     deferred_logger.debug("    " + this->name() + " is re-opened after being stopped during local solve");
                 }
-                // Add debug info for switched controls
-                if (ws.production_cmode != pmode_orig || ws.injection_cmode != imode_orig) {
-                    std::string from,to;
-                    if (this->isInjector()) {
-                        from = WellInjectorCMode2String(imode_orig);
-                        to = WellInjectorCMode2String(ws.injection_cmode);
-                    } else {
-                        from = WellProducerCMode2String(pmode_orig);
-                        to = WellProducerCMode2String(ws.production_cmode);
-                    }
-                    deferred_logger.debug("    " + this->name() + " switched from " + from + " to " + to + " during local solve");
-                    }
-
             } else {
                 // unsolvable wells are treated as not operable and will not be solved for in this iteration.
                 if (this->param_.shut_unsolvable_wells_)
@@ -977,40 +997,7 @@ namespace Opm
         }
     }
 
-    template<typename TypeTag>
-    bool
-    WellInterface<TypeTag>::
-    gliftBeginTimeStepWellTestIterateWellEquations(const Simulator& simulator,
-                                                   const double dt,
-                                                   WellState<Scalar>& well_state,
-                                                   const GroupState<Scalar>& group_state,
-                                                   DeferredLogger& deferred_logger)
-    {
-        OPM_TIMEFUNCTION();
-        const auto& well_name = this->name();
-        assert(this->wellHasTHPConstraints(simulator.vanguard().summaryState()));
-        const auto& schedule = simulator.vanguard().schedule();
-        auto report_step_idx = simulator.episodeIndex();
-        const auto& glo = schedule.glo(report_step_idx);
-        if(glo.active() && glo.has_well(well_name)) {
-            const auto increment = glo.gaslift_increment();
-            auto alq = well_state.getALQ(well_name);
-            bool converged;
-            while (alq > 0) {
-                well_state.setALQ(well_name, alq);
-                if ((converged =
-                      iterateWellEquations(simulator, dt, well_state, group_state, deferred_logger)))
-                {
-                    return converged;
-                }
-                alq -= increment;
-            }
-            return false;
-        }
-        else {
-            return iterateWellEquations(simulator, dt, well_state, group_state, deferred_logger);
-        }
-    }
+
 
     template<typename TypeTag>
     void
@@ -1149,6 +1136,10 @@ namespace Opm
         const int np = well_state.numPhases();
         const auto& summaryState = simulator.vanguard().summaryState();
         const auto& schedule = simulator.vanguard().schedule();
+
+        // Discard old primary variables, the new well state
+        // may not be anywhere near the old one.
+        ws.primaryvar.resize(0);
 
         if (this->wellIsStopped()) {
             for (int p = 0; p<np; ++p) {
@@ -1616,10 +1607,11 @@ namespace Opm
     template <typename TypeTag>
     void
     WellInterface<TypeTag>::
-    updateWellStateRates(const Simulator& simulator,
-                         WellState<Scalar>& well_state,
-                         DeferredLogger& deferred_logger) const
+    initializeProducerWellState(const Simulator& simulator,
+                                WellState<Scalar>& well_state,
+                                DeferredLogger& deferred_logger) const
     {
+        assert(this->isProducer());
         OPM_TIMEFUNCTION();
         // Check if the rates of this well only are single-phase, do nothing
         // if more than one nonzero rate.
@@ -1637,29 +1629,65 @@ namespace Opm
             }
         }
 
-        // Calculate the rates that follow from the current primary variables.
-        std::vector<Scalar> well_q_s = computeCurrentWellRates(simulator, deferred_logger);
+        // Calculate rates at bhp limit, or 1 bar if no limit.
+        std::vector<Scalar> well_q_s(this->number_of_phases_, 0.0);
+        bool rates_evaluated_at_1bar = false;
+        {
+            const auto& summary_state = simulator.vanguard().summaryState();
+            const auto& prod_controls = this->well_ecl_.productionControls(summary_state);
+            const double bhp_limit = std::max(prod_controls.bhp_limit, 1.0 * unit::barsa);
+            this->computeWellRatesWithBhp(simulator, bhp_limit, well_q_s, deferred_logger);
+            // Remember of we evaluated the rates at (approx.) 1 bar or not.
+            rates_evaluated_at_1bar = (bhp_limit < 1.1 * unit::barsa);
+            // Check that no rates are positive.
+            if (std::any_of(well_q_s.begin(), well_q_s.end(), [](Scalar q) { return q > 0.0; })) {
+                // Did we evaluate at 1 bar? If not, then we can try again at 1 bar.
+                if (!rates_evaluated_at_1bar) {
+                    this->computeWellRatesWithBhp(simulator, 1.0 * unit::barsa, well_q_s, deferred_logger);
+                    rates_evaluated_at_1bar = true;
+                }
+                // At this point we can only set the wrong-direction (if any) values to zero.
+                for (auto& q : well_q_s) {
+                    q = std::min(q, Scalar{0.0});
+                }
+            }
+        }
 
         if (nonzero_rate_index == -1) {
-            // No nonzero rates.
-            // Use the computed rate directly
+            // No nonzero rates on input.
+            // Use the computed rate directly, or scaled by a factor
+            // 0.5 (to avoid too high values) if it was evaluated at 1 bar.
+            const Scalar factor = rates_evaluated_at_1bar ? 0.5 : 1.0;
             for (int p = 0; p < this->number_of_phases_; ++p) {
-               ws.surface_rates[p] = well_q_s[this->flowPhaseToModelCompIdx(p)];
+               ws.surface_rates[p] = factor * well_q_s[p];
             }
             return;
         }
 
-        // Set the currently-zero phase flows to be nonzero in proportion to well_q_s.
+        // If we are here, we had a single nonzero rate for the well,
+        // typically from a rate constraint. We must make sure it is
+        // respected, so if it was lower than the calculated rate for
+        // the same phase we scale all rates to match.
         const Scalar initial_nonzero_rate = ws.surface_rates[nonzero_rate_index];
-        const int comp_idx_nz = this->flowPhaseToModelCompIdx(nonzero_rate_index);
-        if (std::abs(well_q_s[comp_idx_nz]) > floating_point_error_epsilon) {
+        const Scalar computed_rate = well_q_s[nonzero_rate_index];
+        if (std::abs(initial_nonzero_rate) < std::abs(computed_rate)) {
+            // Note that both rates below are negative. The factor should be < 1.0.
+            const Scalar factor = initial_nonzero_rate / computed_rate;
+            assert(factor < 1.0);
             for (int p = 0; p < this->number_of_phases_; ++p) {
+                // We skip the nonzero_rate_index, as that should remain as it was.
                 if (p != nonzero_rate_index) {
-                    const int comp_idx = this->flowPhaseToModelCompIdx(p);
-                    Scalar& rate = ws.surface_rates[p];
-                    rate = (initial_nonzero_rate / well_q_s[comp_idx_nz]) * (well_q_s[comp_idx]);
+                    ws.surface_rates[p] = factor * well_q_s[p];
                 }
             }
+            return;
+        }
+
+        // If we are here, we had a single nonzero rate, but it was
+        // higher than the one calculated from the bhp limit, so we
+        // use the calculated rates.
+        for (int p = 0; p < this->number_of_phases_; ++p) {
+            ws.surface_rates[p] = well_q_s[p];
         }
     }
 
@@ -1854,7 +1882,7 @@ namespace Opm
     void
     WellInterface<TypeTag>::
     getMobility(const Simulator& simulator,
-                const int perf,
+                const int local_perf_index,
                 std::vector<Value>& mob,
                 Callback& extendEval,
                 [[maybe_unused]] DeferredLogger& deferred_logger) const
@@ -1867,17 +1895,17 @@ namespace Opm
                                     return std::array<Eval,3>{};
                                 }
                             };
-        if (static_cast<std::size_t>(perf) >= this->well_cells_.size()) {
+        if (static_cast<std::size_t>(local_perf_index) >= this->well_cells_.size()) {
             OPM_THROW(std::invalid_argument,"The perforation index exceeds the size of the local containers - possibly getMobility was called with a global instead of a local perforation index!");
         }
-        const int cell_idx = this->well_cells_[perf];
+        const int cell_idx = this->well_cells_[local_perf_index];
         assert (int(mob.size()) == this->num_components_);
         const auto& intQuants = simulator.model().intensiveQuantities(cell_idx, /*timeIdx=*/0);
         const auto& materialLawManager = simulator.problem().materialLawManager();
 
         // either use mobility of the perforation cell or calculate its own
         // based on passing the saturation table index
-        const int satid = this->saturation_table_number_[perf] - 1;
+        const int satid = this->saturation_table_number_[local_perf_index] - 1;
         const int satid_elem = materialLawManager->satnumRegionIdx(cell_idx);
         if (satid == satid_elem) { // the same saturation number is used. i.e. just use the mobilty from the cell
             for (unsigned phaseIdx = 0; phaseIdx < FluidSystem::numPhases; ++phaseIdx) {
@@ -1916,13 +1944,13 @@ namespace Opm
         }
 
         if (this->isInjector() && !this->inj_fc_multiplier_.empty()) {
-            const auto perf_ecl_index = this->perforationData()[perf].ecl_index;
+            const auto perf_ecl_index = this->perforationData()[local_perf_index].ecl_index;
             const auto& connections = this->well_ecl_.getConnections();
             const auto& connection = connections[perf_ecl_index];
             if (connection.filterCakeActive()) {
-                for (auto& val : mob) {
-                    val *= this->inj_fc_multiplier_[perf];
-                }
+                std::transform(mob.begin(), mob.end(), mob.begin(),
+                               [mult = this->inj_fc_multiplier_[local_perf_index] ](const auto val)
+                               { return val * mult; });
             }
         }
     }

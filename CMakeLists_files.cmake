@@ -59,8 +59,8 @@ list (APPEND MAIN_SOURCE_FILES
   flowexperimental/BlackOilIntensiveQuantitiesGlobalIndex.hpp
   flowexperimental/comp/EmptyModel.hpp
   flowexperimental/comp/flowexp_comp.hpp
-  flowexperimental/comp/wells/CompositionalWellModel.hpp
-  flowexperimental/comp/wells/CompositionalWellModel_impl.hpp
+  flowexperimental/comp/wells/CompWellModel.hpp
+  flowexperimental/comp/wells/CompWellModel_impl.hpp
   flowexperimental/comp/wells/CompWellEquations.hpp
   flowexperimental/comp/wells/CompWellEquations_impl.hpp
   flowexperimental/comp/wells/CompWell.hpp
@@ -99,7 +99,6 @@ list (APPEND MAIN_SOURCE_FILES
   opm/models/io/vtktemperatureparams.cpp
   opm/models/io/restart.cpp
   opm/models/nonlinear/newtonmethodparams.cpp
-  opm/models/parallel/mpiutil.cpp
   opm/models/parallel/tasklets.cpp
   opm/models/parallel/threadmanager.cpp
   opm/models/utils/parametersystem.cpp
@@ -182,6 +181,7 @@ list (APPEND MAIN_SOURCE_FILES
   opm/simulators/utils/ComponentName.cpp
   opm/simulators/utils/DeferredLogger.cpp
   opm/simulators/utils/FullySupportedFlowKeywords.cpp
+  opm/simulators/utils/InstantiationIndicesMacros.hpp
   opm/simulators/utils/ParallelFileMerger.cpp
   opm/simulators/utils/ParallelRestart.cpp
   opm/simulators/utils/PartiallySupportedFlowKeywords.cpp
@@ -346,6 +346,8 @@ if (HAVE_CUDA)
   ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg gpu_smart_pointer.hpp)
   ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg gpu_resources.hpp)
   ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg detail/is_gpu_pointer.hpp)
+  ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg PreconditionerCPUMatrixToGPUMatrix.hpp)
+  
   if(MPI_FOUND)
     ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg GpuOwnerOverlapCopy.hpp)
   endif()
@@ -510,6 +512,8 @@ if (HAVE_CUDA)
   ADD_CUDA_OR_HIP_FILE(TEST_SOURCE_FILES tests test_gpu_resources.cu)
   ADD_CUDA_OR_HIP_FILE(TEST_SOURCE_FILES tests test_is_gpu_pointer.cpp)
   ADD_CUDA_OR_HIP_FILE(TEST_SOURCE_FILES tests test_throw_macros_on_gpu.cu)
+  ADD_CUDA_OR_HIP_FILE(TEST_SOURCE_FILES tests test_preconditioner_factory_gpu.cpp)
+
   if(MPI_FOUND)
     ADD_CUDA_OR_HIP_FILE(TEST_SOURCE_FILES tests test_GpuOwnerOverlapCopy.cpp)
   endif()
@@ -649,7 +653,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/models/blackoil/blackoilextensivequantities.hh
   opm/models/blackoil/blackoilfoammodules.hh
   opm/models/blackoil/blackoilfoamparams.hpp
-  opm/models/blackoil/blackoilindices.hh
+  opm/models/blackoil/blackoilvariableandequationindices.hh
   opm/models/blackoil/blackoilintensivequantities.hh
   opm/models/blackoil/blackoillocalresidual.hh
   opm/models/blackoil/blackoillocalresidualtpfa.hh
@@ -799,7 +803,6 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/models/nonlinear/nullconvergencewriter.hh
   opm/models/parallel/gridcommhandles.hh
   opm/models/parallel/mpibuffer.hh
-  opm/models/parallel/mpiutil.hpp
   opm/models/parallel/tasklets.hpp
   opm/models/parallel/threadedentityiterator.hh
   opm/models/parallel/threadmanager.hpp
@@ -965,6 +968,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/linalg/globalindices.hh
   opm/simulators/linalg/GraphColoring.hpp
   opm/simulators/linalg/ilufirstelement.hh
+  opm/simulators/linalg/is_gpu_operator.hpp
   opm/simulators/linalg/ISTLSolver.hpp
   opm/simulators/linalg/istlpreconditionerwrappers.hh
   opm/simulators/linalg/istlsolverwrappers.hh
@@ -994,6 +998,11 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/linalg/PreconditionerFactoryGPUIncludeWrapper.hpp
   opm/simulators/linalg/PreconditionerFactory.hpp
   opm/simulators/linalg/PreconditionerFactory_impl.hpp
+  opm/simulators/linalg/StandardPreconditioners.hpp
+  opm/simulators/linalg/StandardPreconditioners_mpi.hpp
+  opm/simulators/linalg/StandardPreconditioners_serial.hpp
+  opm/simulators/linalg/StandardPreconditioners_gpu_serial.hpp
+  opm/simulators/linalg/StandardPreconditioners_gpu_mpi.hpp
   opm/simulators/linalg/PreconditionerWithUpdate.hpp
   opm/simulators/linalg/PressureBhpTransferPolicy.hpp
   opm/simulators/linalg/PressureSolverPolicy.hpp

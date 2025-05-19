@@ -429,16 +429,14 @@ namespace Opm {
         // we need the inj_multiplier from the previous time step
         this->initInjMult();
 
-        const auto& summaryState = simulator_.vanguard().summaryState();
         if (alternative_well_rate_init_) {
             // Update the well rates of well_state_, if only single-phase rates, to
             // have proper multi-phase rates proportional to rates at bhp zero.
             // This is done only for producers, as injectors will only have a single
             // nonzero phase anyway.
             for (const auto& well : well_container_) {
-                const bool zero_target = well->stoppedOrZeroRateTarget(simulator_, this->wellState(), local_deferredLogger);
-                if (well->isProducer() && !zero_target) {
-                    well->updateWellStateRates(simulator_, this->wellState(), local_deferredLogger);
+                if (well->isProducer() && !well->wellIsStopped()) {
+                    well->initializeProducerWellState(simulator_, this->wellState(), local_deferredLogger);
                 }
             }
         }
@@ -466,7 +464,7 @@ namespace Opm {
         const Group& fieldGroup = this->schedule().getGroup("FIELD", reportStepIdx);
         WellGroupHelpers<Scalar>::updateGuideRates(fieldGroup,
                                                    this->schedule(),
-                                                   summaryState,
+                                                   this->summaryState(),
                                                    this->phase_usage_,
                                                    reportStepIdx,
                                                    simulationTime,
@@ -559,7 +557,7 @@ namespace Opm {
 
             // initialize rates/previous rates to prevent zero fractions in vfp-interpolation
             if (well->isProducer()) {
-                well->updateWellStateRates(simulator_, this->wellState(), deferred_logger);
+                well->initializeProducerWellState(simulator_, this->wellState(), deferred_logger);
             }
             if (well->isVFPActive(deferred_logger)) {
                 well->setPrevSurfaceRates(this->wellState(), this->prevWellState());
@@ -1244,10 +1242,15 @@ namespace Opm {
                                           DeferredLogger& local_deferredLogger)
     {
         OPM_TIMEFUNCTION();
-        auto [well_group_control_changed, more_inner_network_update, network_imbalance] =
-                updateWellControls(mandatory_network_balance,
-                                   local_deferredLogger,
-                                   relax_network_tolerance);
+        const int iterationIdx = simulator_.model().newtonMethod().numIterations();
+        const int reportStepIdx = simulator_.episodeIndex();
+        this->updateAndCommunicateGroupData(reportStepIdx, iterationIdx, param_.nupcol_group_rate_tolerance_, local_deferredLogger);
+        const auto [more_inner_network_update, network_imbalance] =
+                updateNetworks(mandatory_network_balance,
+                               local_deferredLogger,
+                               relax_network_tolerance);
+
+        bool well_group_control_changed = updateWellControls(local_deferredLogger);
 
         bool alq_updated = false;
         OPM_BEGIN_PARALLEL_TRY_CATCH();
@@ -1265,7 +1268,6 @@ namespace Opm {
                                        this->terminal_output_, grid().comm());
 
         // update guide rates
-        const int reportStepIdx = simulator_.episodeIndex();
         if (alq_updated || BlackoilWellModelGuideRates(*this).
                               guideRateUpdateIsNeeded(reportStepIdx)) {
             const double simulationTime = simulator_.time();
@@ -1288,7 +1290,6 @@ namespace Opm {
         }
         // we need to re-iterate the network when the well group controls changed or gaslift/alq is changed or
         // the inner iterations are did not converge
-        const int iterationIdx = simulator_.model().newtonMethod().numIterations();
         const bool more_network_update = this->shouldBalanceNetwork(reportStepIdx, iterationIdx) &&
                     (more_inner_network_update || well_group_control_changed || alq_updated);
         return {well_group_control_changed, more_network_update, network_imbalance};
@@ -1751,9 +1752,87 @@ namespace Opm {
 
 
     template<typename TypeTag>
-    std::tuple<bool, bool, typename BlackoilWellModel<TypeTag>::Scalar>
+    bool
     BlackoilWellModel<TypeTag>::
-    updateWellControls(const bool mandatory_network_balance,
+    updateWellControls(DeferredLogger& deferred_logger)
+    {
+        OPM_TIMEFUNCTION();
+        if (!this->wellsActive()) {
+            return false;
+        }
+        const int episodeIdx = simulator_.episodeIndex();
+        const int iterationIdx = simulator_.model().newtonMethod().numIterations();
+        const auto& comm = simulator_.vanguard().grid().comm();
+
+        size_t iter = 0;
+        bool changed_well_group = false;
+        const Group& fieldGroup = this->schedule().getGroup("FIELD", episodeIdx);
+        // Check group individual constraints.
+        // iterate a few times to make sure all constraints are honored
+        const std::size_t max_iter = param_.well_group_constraints_max_iterations_;
+        while(!changed_well_group && iter < max_iter) {
+            changed_well_group = updateGroupControls(fieldGroup, deferred_logger, episodeIdx, iterationIdx);
+
+            // Check wells' group constraints and communicate.
+            bool changed_well_to_group = false;
+            {
+                OPM_TIMEBLOCK(UpdateWellControls);
+                // For MS Wells a linear solve is performed below and the matrix might be singular.
+                // We need to communicate the exception thrown to the others and rethrow.
+                OPM_BEGIN_PARALLEL_TRY_CATCH()
+                    for (const auto& well : well_container_) {
+                        const auto mode = WellInterface<TypeTag>::IndividualOrGroup::Group;
+                        const bool changed_well = well->updateWellControl(simulator_, mode, this->wellState(), this->groupState(), deferred_logger);
+                        if (changed_well) {
+                            changed_well_to_group = changed_well || changed_well_to_group;
+                        }
+                    }
+                OPM_END_PARALLEL_TRY_CATCH("BlackoilWellModel: updating well controls failed: ",
+                                        simulator_.gridView().comm());
+            }
+
+            changed_well_to_group = comm.sum(static_cast<int>(changed_well_to_group));
+            if (changed_well_to_group) {
+                updateAndCommunicate(episodeIdx, iterationIdx, deferred_logger);
+                changed_well_group = true;
+            }
+
+            // Check individual well constraints and communicate.
+            bool changed_well_individual = false;
+            {
+                // For MS Wells a linear solve is performed below and the matrix might be singular.
+                // We need to communicate the exception thrown to the others and rethrow.
+                OPM_BEGIN_PARALLEL_TRY_CATCH()
+                    for (const auto& well : well_container_) {
+                        const auto mode = WellInterface<TypeTag>::IndividualOrGroup::Individual;
+                        const bool changed_well = well->updateWellControl(simulator_, mode, this->wellState(), this->groupState(), deferred_logger);
+                        if (changed_well) {
+                            changed_well_individual = changed_well || changed_well_individual;
+                        }
+                    }
+                OPM_END_PARALLEL_TRY_CATCH("BlackoilWellModel: updating well controls failed: ",
+                                        simulator_.gridView().comm());
+            }
+
+            changed_well_individual = comm.sum(static_cast<int>(changed_well_individual));
+            if (changed_well_individual) {
+                updateAndCommunicate(episodeIdx, iterationIdx, deferred_logger);
+                changed_well_group = true;
+            }
+            iter++;
+        }
+
+        // update wsolvent fraction for REIN wells
+        this->updateWsolvent(fieldGroup, episodeIdx,  this->nupcolWellState());
+
+        return changed_well_group;
+    }
+
+
+    template<typename TypeTag>
+    std::tuple<bool, typename BlackoilWellModel<TypeTag>::Scalar>
+    BlackoilWellModel<TypeTag>::
+    updateNetworks(const bool mandatory_network_balance,
                        DeferredLogger& deferred_logger,
                        const bool relax_network_tolerance)
     {
@@ -1761,21 +1840,20 @@ namespace Opm {
         const int episodeIdx = simulator_.episodeIndex();
         const auto& network = this->schedule()[episodeIdx].network();
         if (!this->wellsActive() && !network.active()) {
-            return {false, false, 0.0};
+            return {false, 0.0};
         }
 
         const int iterationIdx = simulator_.model().newtonMethod().numIterations();
         const auto& comm = simulator_.vanguard().grid().comm();
-        this->updateAndCommunicateGroupData(episodeIdx, iterationIdx, param_.nupcol_group_rate_tolerance_, deferred_logger);
 
         // network related
         Scalar network_imbalance = 0.0;
         bool more_network_update = false;
         if (this->shouldBalanceNetwork(episodeIdx, iterationIdx) || mandatory_network_balance) {
-            OPM_TIMEBLOCK(BalanceNetowork);
+            OPM_TIMEBLOCK(BalanceNetwork);
             const double dt = this->simulator_.timeStepSize();
             // Calculate common THP for subsea manifold well group (item 3 of NODEPROP set to YES)
-            bool well_group_thp_updated = computeWellGroupThp(dt, deferred_logger);
+            const bool well_group_thp_updated = computeWellGroupThp(dt, deferred_logger);
             const int max_number_of_sub_iterations = param_.network_max_sub_iterations_;
             const Scalar network_pressure_update_damping_factor = param_.network_pressure_update_damping_factor_;
             const Scalar network_max_pressure_update = param_.network_max_pressure_update_in_bars_ * unit::barsa;
@@ -1807,64 +1885,9 @@ namespace Opm {
             }
             more_network_update = more_network_sub_update || well_group_thp_updated;
         }
-
-        bool changed_well_group = false;
-        // Check group individual constraints.
-        const Group& fieldGroup = this->schedule().getGroup("FIELD", episodeIdx);
-        changed_well_group = updateGroupControls(fieldGroup, deferred_logger, episodeIdx, iterationIdx);
-
-        // Check wells' group constraints and communicate.
-        bool changed_well_to_group = false;
-        {
-            OPM_TIMEBLOCK(UpdateWellControls);
-            // For MS Wells a linear solve is performed below and the matrix might be singular.
-            // We need to communicate the exception thrown to the others and rethrow.
-            OPM_BEGIN_PARALLEL_TRY_CATCH()
-                for (const auto& well : well_container_) {
-                    const auto mode = WellInterface<TypeTag>::IndividualOrGroup::Group;
-                    const bool changed_well = well->updateWellControl(simulator_, mode, this->wellState(), this->groupState(), deferred_logger);
-                    if (changed_well) {
-                        changed_well_to_group = changed_well || changed_well_to_group;
-                    }
-                }
-            OPM_END_PARALLEL_TRY_CATCH("BlackoilWellModel: updating well controls failed: ",
-                                       simulator_.gridView().comm());
-        }
-
-        changed_well_to_group = comm.sum(static_cast<int>(changed_well_to_group));
-        if (changed_well_to_group) {
-            updateAndCommunicate(episodeIdx, iterationIdx, deferred_logger);
-            changed_well_group = true;
-        }
-
-        // Check individual well constraints and communicate.
-        bool changed_well_individual = false;
-        {
-            // For MS Wells a linear solve is performed below and the matrix might be singular.
-            // We need to communicate the exception thrown to the others and rethrow.
-            OPM_BEGIN_PARALLEL_TRY_CATCH()
-                for (const auto& well : well_container_) {
-                    const auto mode = WellInterface<TypeTag>::IndividualOrGroup::Individual;
-                    const bool changed_well = well->updateWellControl(simulator_, mode, this->wellState(), this->groupState(), deferred_logger);
-                    if (changed_well) {
-                        changed_well_individual = changed_well || changed_well_individual;
-                    }
-                }
-            OPM_END_PARALLEL_TRY_CATCH("BlackoilWellModel: updating well controls failed: ",
-                                       simulator_.gridView().comm());
-        }
-
-        changed_well_individual = comm.sum(static_cast<int>(changed_well_individual));
-        if (changed_well_individual) {
-            updateAndCommunicate(episodeIdx, iterationIdx, deferred_logger);
-            changed_well_group = true;
-        }
-
-        // update wsolvent fraction for REIN wells
-        this->updateWsolvent(fieldGroup, episodeIdx,  this->nupcolWellState());
-
-        return { changed_well_group, more_network_update, network_imbalance };
+        return { more_network_update, network_imbalance };
     }
+
 
     template<typename TypeTag>
     void
@@ -2177,11 +2200,10 @@ namespace Opm {
 
         // compute global average
         grid.comm().sum(B_avg.data(), B_avg.size());
-        for (auto& bval : B_avg)
-        {
-            bval /= global_num_cells_;
-        }
-        B_avg_ = B_avg;
+        B_avg_.resize(B_avg.size());
+        std::transform(B_avg.begin(), B_avg.end(), B_avg_.begin(),
+                       [gcells = global_num_cells_](const auto bval)
+                       { return bval / gcells; });
     }
 
 
@@ -2352,6 +2374,22 @@ namespace Opm {
             }
         }
     }
+
+
+    template <typename TypeTag>
+    void BlackoilWellModel<TypeTag>::
+    assignWellTracerRates(data::Wells& wsrpt) const
+    {
+        const auto reportStepIdx = static_cast<unsigned int>(this->reportStepIndex());
+        const auto& trMod = this->simulator_.problem().tracerModel();
+
+        BlackoilWellModelGeneric<Scalar>::assignWellTracerRates(wsrpt, trMod.getWellTracerRates(), reportStepIdx);
+        BlackoilWellModelGeneric<Scalar>::assignWellTracerRates(wsrpt, trMod.getWellFreeTracerRates(), reportStepIdx);
+        BlackoilWellModelGeneric<Scalar>::assignWellTracerRates(wsrpt, trMod.getWellSolTracerRates(), reportStepIdx);
+
+        this->assignMswTracerRates(wsrpt, trMod.getMswTracerRates(), reportStepIdx);
+    }
+
 } // namespace Opm
 
-#endif
+#endif // OPM_BLACKOILWELLMODEL_IMPL_HEADER_INCLUDED

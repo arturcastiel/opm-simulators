@@ -192,12 +192,8 @@ template<class Scalar>
 bool BlackoilWellModelGeneric<Scalar>::
 anyMSWellOpenLocal() const
 {
-    for (const auto& well : wells_ecl_) {
-        if (well.isMultiSegment()) {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(wells_ecl_.begin(), wells_ecl_.end(),
+                       [](const auto& well) { return well.isMultiSegment(); });
 }
 
 template<class Scalar>
@@ -221,7 +217,8 @@ void BlackoilWellModelGeneric<Scalar>::
 initFromRestartFile(const RestartValue& restartValues,
                     std::unique_ptr<WellTestState> wtestState,
                     const std::size_t numCells,
-                    bool handle_ms_well)
+                    bool handle_ms_well,
+                    bool enable_distributed_wells)
 {
     // The restart step value is used to identify wells present at the given
     // time step. Wells that are added at the same time step as RESTART is initiated
@@ -242,7 +239,7 @@ initFromRestartFile(const RestartValue& restartValues,
     // Resize for restart step
     this->wellState().resize(this->wells_ecl_, this->local_parallel_well_info_,
                              this->schedule(), handle_ms_well, numCells,
-                             this->well_perf_data_, this->summaryState_);
+                             this->well_perf_data_, this->summaryState_, enable_distributed_wells);
 
     BlackoilWellModelRestart(*this).
         loadRestartData(restartValues.wells,
@@ -274,7 +271,7 @@ initFromRestartFile(const RestartValue& restartValues,
 
 template<class Scalar>
 void BlackoilWellModelGeneric<Scalar>::
-prepareDeserialize(int report_step, const std::size_t numCells, bool handle_ms_well)
+prepareDeserialize(int report_step, const std::size_t numCells, bool handle_ms_well, bool enable_distributed_wells)
 {
     // wells_ecl_ should only contain wells on this processor.
     wells_ecl_ = getLocalWells(report_step);
@@ -287,7 +284,7 @@ prepareDeserialize(int report_step, const std::size_t numCells, bool handle_ms_w
         handle_ms_well &= anyMSWellOpenLocal();
         this->wellState().resize(this->wells_ecl_, this->local_parallel_well_info_,
                                  this->schedule(), handle_ms_well, numCells,
-                                 this->well_perf_data_, this->summaryState_);
+                                 this->well_perf_data_, this->summaryState_, enable_distributed_wells);
 
     }
     this->wellState().clearWellRates();
@@ -1032,18 +1029,31 @@ setWsolvent(const Group& group,
     }
 }
 
+template <class Scalar>
+template <typename LoopBody>
+void BlackoilWellModelGeneric<Scalar>::
+loopOwnedWells(LoopBody&& loopBody) const
+{
+    auto wellIndex = 0 * this->wells_ecl_.size();
+
+    for (const auto& pwInfo : this->local_parallel_well_info_) {
+        if (pwInfo.get().isOwner()) {
+            loopBody(wellIndex, this->wells_ecl_[wellIndex]);
+        }
+
+        ++wellIndex;
+    }
+}
+
 template<class Scalar>
 void BlackoilWellModelGeneric<Scalar>::
 assignWellTargets(data::Wells& wsrpt) const
 {
-    auto pwInfo = this->local_parallel_well_info_.begin();
-
-    for (const auto& well : this->wells_ecl_) {
-        if (! pwInfo++->get().isOwner()) {
-            continue;
-        }
-
-        // data::Wells is a std::map<>
+    this->loopOwnedWells([this, &wsrpt]
+                         ([[maybe_unused]] const auto wellIndex,
+                          const Well&                 well)
+    {
+        // data::Wells (i.e., 'wsrpt') is a std::map<>
         auto& limits = wsrpt[well.name()].limits;
 
         if (well.isProducer()) {
@@ -1052,7 +1062,7 @@ assignWellTargets(data::Wells& wsrpt) const
         else {
             this->assignInjectionWellTargets(well, limits);
         }
-    }
+    });
 }
 
 template<class Scalar>
@@ -1102,29 +1112,52 @@ assignInjectionWellTargets(const Well& well, data::WellControlLimits& limits) co
 
 template<class Scalar>
 void BlackoilWellModelGeneric<Scalar>::
+assignDynamicWellStatus(data::Wells& wsrpt,
+                        const int reportStepIndex) const
+{
+    this->loopOwnedWells([this, reportStepIndex, &wsrpt]
+                         (const auto wellID, const Well& well)
+    {
+        auto& xwel = wsrpt[well.name()]; // data::Wells is a std::map<>
+
+        xwel.dynamicStatus = this->schedule()[reportStepIndex]
+            .wells(well.name()).getStatus();
+
+        if ((xwel.dynamicStatus == Well::Status::OPEN) &&
+            this->wellTestState().well_is_closed(well.name()) &&
+            !this->wasDynamicallyShutThisTimeStep(wellID))
+        {
+            // Well is supposed to be flowing according to the run
+            // specification (Schedule object), but it is not operable or
+            // cannot meet its economic limits (well testing).
+            //
+            // Assign status based on the well's defined automatic shut-in
+            // procedure.
+            xwel.dynamicStatus = well.getAutomaticShutIn()
+                ? Well::Status::SHUT : Well::Status::STOP;
+        }
+    });
+}
+
+template<class Scalar>
+void BlackoilWellModelGeneric<Scalar>::
 assignShutConnections(data::Wells& wsrpt,
                       const int reportStepIndex) const
 {
-    auto wellID = 0;
+    this->loopOwnedWells([this, reportStepIndex, &wsrpt]
+                         ([[maybe_unused]] const auto wellID,
+                          const Well&                 well)
+    {
+        const auto wellIsOpen =
+            this->schedule()[reportStepIndex].wells(well.name())
+            .getStatus() == Well::Status::OPEN;
 
-    for (const auto& well : this->wells_ecl_) {
-        auto& xwel = wsrpt[well.name()]; // data::Wells is a std::map<>
-
-        xwel.dynamicStatus = this->schedule()
-            .getWell(well.name(), reportStepIndex).getStatus();
-
-        const auto wellIsOpen = xwel.dynamicStatus == Well::Status::OPEN;
         auto skip = [wellIsOpen](const Connection& conn)
         {
             return wellIsOpen && (conn.state() != Connection::State::SHUT);
         };
 
-        if (this->wellTestState().well_is_closed(well.name()) &&
-            !this->wasDynamicallyShutThisTimeStep(wellID))
-        {
-            xwel.dynamicStatus = well.getAutomaticShutIn()
-                ? Well::Status::SHUT : Well::Status::STOP;
-        }
+        auto& xwel = wsrpt[well.name()]; // data::Wells is a std::map<>
 
         auto& xcon = xwel.connections;
         for (const auto& conn : well.getConnections()) {
@@ -1140,9 +1173,7 @@ assignShutConnections(data::Wells& wsrpt,
             xc.trans_factor = conn.CF();
             xc.d_factor = conn.dFactor();
         }
-
-        ++wellID;
-    }
+    });
 }
 
 template<class Scalar>
@@ -1458,25 +1489,33 @@ forceShutWellByName(const std::string& wellname,
     // Only add the well to the closed list on the
     // process that owns it.
     int well_was_shut = 0;
-    for (const auto& well : well_container_generic_) {
-        if (well->name() == wellname) {
-            // if one well on individuel control (typical thp/bhp) in a group strugles to converge
-            // it may lead to problems for the other wells in the group
-            // we dont want to shut all the wells in a group only the one creating the problems.
-            const auto& ws = this->wellState().well(well->indexOfWell());
-            if (dont_shut_grup_wells) {
-                if (well->isInjector()) {
-                    if (ws.injection_cmode == Well::InjectorCMode::GRUP)
-                        continue;
-                } else {
-                    if (ws.production_cmode == Well::ProducerCMode::GRUP)
-                        continue;
-                }
-            }
-            wellTestState().close_well(wellname, WellTestConfig::Reason::PHYSICAL, simulation_time);
-            well_was_shut = 1;
-            break;
-        }
+    const auto it = std::find_if(well_container_generic_.begin(),
+                                 well_container_generic_.end(),
+                                 [&wellname, &wState = this->wellState(), dont_shut_grup_wells](const auto& well)
+                                 {
+                                     if (well->name() == wellname) {
+                                         // if one well on individual control (typical thp/bhp)
+                                         // in a group struggles to converge
+                                         // it may lead to problems for the other wells in the group
+                                         // we dont want to shut all the wells in a group only the one
+                                         // creating the problems.
+                                          if (dont_shut_grup_wells) {
+                                             const auto& ws = wState.well(well->indexOfWell());
+                                             if (well->isInjector()) {
+                                                 return ws.injection_cmode != Well::InjectorCMode::GRUP;
+                                             } else {
+                                                 return ws.production_cmode != Well::ProducerCMode::GRUP;
+                                             }
+                                         }
+                                         return true;
+                                     }
+                                     else {
+                                         return false;
+                                     }
+                                 });
+    if (it != well_container_generic_.end()) {
+        wellTestState().close_well(wellname, WellTestConfig::Reason::PHYSICAL, simulation_time);
+        well_was_shut = 1;
     }
 
     // Communicate across processes if a well was shut.
@@ -1834,16 +1873,17 @@ getWellsForTesting(const int timeStepIdx,
 template<class Scalar>
 void BlackoilWellModelGeneric<Scalar>::
 assignMassGasRate(data::Wells& wsrpt,
-                  const Scalar& gasDensity) const
+                  const Scalar gasDensity) const
 {
     using rt = data::Rates::opt;
+
     for (auto& wrpt : wsrpt) {
         auto& well_rates = wrpt.second.rates;
         const auto w_mass_rate = well_rates.get(rt::gas, 0.0) * gasDensity;
+
         well_rates.set(rt::mass_gas, w_mass_rate);
     }
 }
-
 
 template<class Scalar>
 void BlackoilWellModelGeneric<Scalar>::
@@ -1873,8 +1913,9 @@ assignMswTracerRates(data::Wells& wsrpt,
                      const MswTracerRates& mswTracerRates,
                      const unsigned reportStep) const
 {
-    if (mswTracerRates.empty())
+    if (mswTracerRates.empty()) {
         return;
+    }
 
     for (const auto& mswTR : mswTracerRates) {
         const auto& eclWell = schedule_.getWell(mswTR.first, reportStep);
@@ -1909,7 +1950,7 @@ getMaxWellConnections() const
 #if HAVE_MPI
     // Communicate Map to other processes, since it is only available on rank 0
     Parallel::MpiSerializer ser(comm_);
-    ser.broadcast(possibleFutureConnections);
+    ser.broadcast(Parallel::RootRank{0}, possibleFutureConnections);
 #endif
     // initialize the additional cell connections introduced by wells.
     for (const auto& well : schedule_wells)
@@ -2083,6 +2124,7 @@ operator==(const BlackoilWellModelGeneric& rhs) const
         && this->local_shut_wells_ == rhs.local_shut_wells_
         && this->closed_this_step_ == rhs.closed_this_step_
         && this->node_pressures_ == rhs.node_pressures_
+        && this->last_valid_node_pressures_ == rhs.last_valid_node_pressures_
         && this->prev_inj_multipliers_ == rhs.prev_inj_multipliers_
         && this->active_wgstate_ == rhs.active_wgstate_
         && this->last_valid_wgstate_ == rhs.last_valid_wgstate_

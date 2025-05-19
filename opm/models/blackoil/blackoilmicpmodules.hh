@@ -35,7 +35,8 @@
 
 #include <opm/models/io/vtkblackoilmicpmodule.hpp>
 
-#include <cstddef>
+#include <memory>
+#include <numeric>
 #include <stdexcept>
 
 namespace Opm {
@@ -106,7 +107,7 @@ public:
                                       Simulator& simulator)
     {
         if constexpr (enableMICP)
-            model.addOutputModule(new VtkBlackOilMICPModule<TypeTag>(simulator));
+            model.addOutputModule(std::make_unique<VtkBlackOilMICPModule<TypeTag>>(simulator));
     }
 
     static bool eqApplies(unsigned eqIdx)
@@ -230,10 +231,10 @@ public:
         if constexpr (enableMICP) {
             const auto& velocityInf = problem.model().linearizer().getVelocityInfo();
             auto velocityInfos = velocityInf[globalSpaceIdex];
-            Scalar normVelocityCell = 0.0;
-            for (const auto& velocityInfo : velocityInfos) {
-                normVelocityCell = max(normVelocityCell, std::abs(velocityInfo.velocity[waterPhaseIdx]));
-            }
+            const Scalar normVelocityCell =
+                std::accumulate(velocityInfos.begin(), velocityInfos.end(), 0.0,
+                                [](const auto acc, const auto& info)
+                                { return max(acc, std::abs(info.velocity[waterPhaseIdx])); });
 
             // get the model parameters
             const auto b = intQuants.fluidState().invB(waterPhaseIdx);

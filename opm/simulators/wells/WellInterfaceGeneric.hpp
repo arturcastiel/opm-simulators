@@ -129,7 +129,7 @@ public:
 
     int numPhases() const { return number_of_phases_; }
 
-    int numPerfs() const { return number_of_local_perforations_; }
+    int numLocalPerfs() const { return number_of_local_perforations_; }
 
     Scalar refDepth() const { return ref_depth_; }
 
@@ -399,4 +399,4 @@ protected:
 
 }
 
-#endif // OPM_WELLINTERFACE_HEADER_INCLUDED
+#endif // OPM_WELLINTERFACE_GENERIC_HEADER_INCLUDED

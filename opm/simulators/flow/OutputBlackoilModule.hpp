@@ -597,7 +597,7 @@ private:
         Problem, std::void_t<decltype(std::declval<Problem>().geoMechModel())>
     > : public std::true_type {};
 
-    bool isDefunctParallelWell(std::string wname) const override
+    bool isDefunctParallelWell(const std::string& wname) const override
     {
         if (simulator_.gridView().comm().size() == 1)
             return false;
@@ -605,6 +605,11 @@ private:
         std::pair<std::string, bool> value {wname, true};
         auto candidate = std::lower_bound(parallelWells.begin(), parallelWells.end(), value);
         return candidate == parallelWells.end() || *candidate != value;
+    }
+
+    bool isOwnedByCurrentRank(const std::string& wname) const override
+    {
+        return this->simulator_.problem().wellModel().isOwner(wname);
     }
 
     void updateFluidInPlace_(const ElementContext& elemCtx, const unsigned dofIdx)
@@ -893,6 +898,11 @@ private:
                 this->updateCalciteMass(globalDofIdx, intQuants, totVolume);
             }
         }
+
+        if (this->fipC_.hasWaterMass() && FluidSystem::phaseIsActive(waterPhaseIdx))
+        {
+            this->updateWaterMass(globalDofIdx, fs, fip);
+        }
     }
 
     template <typename FluidState, typename FIPArray>
@@ -1010,6 +1020,17 @@ private:
 
         return xoG * pv * rhoo * so / mM;
     }
+
+    template <typename FluidState, typename FIPArray>
+    void updateWaterMass(const unsigned    globalDofIdx,
+                         const FluidState& fs,
+                         const FIPArray&   fip
+                         )
+    {
+        const Scalar rhoW = FluidSystem::referenceDensity(waterPhaseIdx, fs.pvtRegionIndex());
+
+        this->fipC_.assignWaterMass(globalDofIdx, fip, rhoW);
+    }   
 
     template <typename IntensiveQuantities>
     void updateMicrobialMass(const unsigned             globalDofIdx,
@@ -1907,8 +1928,8 @@ private:
                                           getValue(ectx.fs.Rv()) *
                                           getValue(ectx.fs.invB(gasPhaseIdx)) *
                                           getValue(ectx.fs.saturation(gasPhaseIdx))) *
-                                         model.dofTotalVolume(ectx.globalDofIdx) *
-                                         getValue(ectx.intQuants.porosity());
+                                          model.dofTotalVolume(ectx.globalDofIdx) *
+                                          getValue(ectx.intQuants.porosity());
                               }
                   }
             },
@@ -2003,8 +2024,8 @@ private:
                               &problem = this->simulator_.problem(),
                               &regions = this->regions_](const unsigned phaseIdx, const Context& ectx)
                              {
-                                 auto phase = RegionPhasePoreVolAverage::Phase{};
-                                 phase.ix = phaseIdx;
+                                auto phase = RegionPhasePoreVolAverage::Phase{};
+                                phase.ix = phaseIdx;
 
                                 // Note different region handling here.  FIPNUM is
                                 // one-based, but we need zero-based lookup in
@@ -2026,6 +2047,19 @@ private:
                                 const auto dz = problem.dofCenterDepth(ectx.globalDofIdx) - datum;
                                 return press - density*dz*grav[GridView::dimensionworld - 1];
                             }
+                  }
+            },
+            Entry{ScalarEntry{"BAMIP",
+                              [&model = this->simulator_.model()](const Context& ectx)
+                              {
+                                  const Scalar rhoW = FluidSystem::referenceDensity(waterPhaseIdx,
+                                                                   ectx.intQuants.pvtRegionIndex());
+                                  return getValue(ectx.fs.invB(waterPhaseIdx)) *
+                                         getValue(ectx.fs.saturation(waterPhaseIdx)) *
+                                         rhoW *
+                                         model.dofTotalVolume(ectx.globalDofIdx) *
+                                         getValue(ectx.intQuants.porosity());
+                              }
                   }
             },
             Entry{ScalarEntry{"BMMIP",

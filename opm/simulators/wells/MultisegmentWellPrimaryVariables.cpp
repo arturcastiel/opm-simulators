@@ -24,10 +24,10 @@
 
 #include <opm/input/eclipse/Schedule/MSW/WellSegments.hpp>
 
-#include <opm/material/fluidsystems/BlackOilDefaultIndexTraits.hpp>
+#include <opm/material/fluidsystems/BlackOilDefaultFluidSystemIndices.hpp>
 #include <opm/material/fluidsystems/BlackOilFluidSystem.hpp>
 
-#include <opm/models/blackoil/blackoilindices.hh>
+#include <opm/models/blackoil/blackoilvariableandequationindices.hh>
 #include <opm/models/blackoil/blackoilonephaseindices.hh>
 #include <opm/models/blackoil/blackoiltwophaseindices.hh>
 
@@ -111,7 +111,16 @@ update(const WellState<Scalar>& well_state,
         if (stop_or_zero_rate_target && seg == 0) {
             value_[seg][WQTotal] = 0;
         }
-        if (std::abs(total_seg_rate) > 0.) {
+
+        // todo to map old fraction to new perforations for now start from scratch.
+        if (ws.primaryvar.size() == value_.size() * numWellEq) {
+            if (has_wfrac_variable) {
+                value_[seg][WFrac] = ws.primaryvar[seg * numWellEq + WFrac];
+            }
+            if (has_gfrac_variable) {
+                value_[seg][GFrac] = ws.primaryvar[seg * numWellEq + GFrac];
+            }
+        } else if (std::abs(total_seg_rate) > 0.) {
             if (has_wfrac_variable) {
                 const int water_pos = pu.phase_pos[Water];
                 value_[seg][WFrac] = well_.scalingFactor(water_pos) * segment_rates[well_.numPhases() * seg + water_pos] / total_seg_rate;
@@ -230,6 +239,15 @@ copyToWellState(const MultisegmentWellGeneric<Scalar>& mswell,
     const int oil_pos = pu.phase_pos[Oil];
 
     auto& ws = well_state.well(well_.indexOfWell());
+
+    // Store primary variables
+    ws.primaryvar.resize(value_.size() * numWellEq);
+    for (std::size_t seg = 0; seg < value_.size(); ++seg) {
+        for (int ii = 0; ii < numWellEq; ++ii) {
+            ws.primaryvar[seg * numWellEq + ii] = value_[seg][ii];
+        }
+    }
+
     auto& segments = ws.segments;
     auto& segment_rates = segments.rates;
     auto& disgas = segments.dissolved_gas_rate;
@@ -683,43 +701,12 @@ outputLowLimitPressureSegments(DeferredLogger& deferred_logger) const
     }
 }
 
-template<class Scalar>
-using FS = BlackOilFluidSystem<Scalar,BlackOilDefaultIndexTraits>;
+#include <opm/simulators/utils/InstantiationIndicesMacros.hpp>
 
-#define INSTANTIATE(T,...) \
-    template class MultisegmentWellPrimaryVariables<FS<T>,__VA_ARGS__>;
-
-#define INSTANTIATE_TYPE(T)                                                  \
-    INSTANTIATE(T,BlackOilOnePhaseIndices<0u,0u,0u,0u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilOnePhaseIndices<0u,0u,0u,1u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilOnePhaseIndices<0u,0u,0u,0u,false,false,0u,1u,5u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,false,0u,0u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,false,0u,2u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,1u,0u,false,false,0u,2u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,1u,false,false,0u,1u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,true,0u,0u,0u>)  \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,0u,false,true,0u,2u,0u>)  \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,2u,0u,false,false,0u,2u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,1u,false,false,0u,0u,0u>) \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<0u,0u,0u,1u,false,true,0u,0u,0u>)  \
-    INSTANTIATE(T,BlackOilTwoPhaseIndices<1u,0u,0u,0u,false,false,0u,0u,0u>) \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<1u,0u,0u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,1u,0u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,1u,0u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,1u,false,false,0u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,true,false,0u,0u>)             \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,false,true,0u,0u>)             \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,1u,false,true,0u,0u>)             \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,false,false,1u,0u>)            \
-    INSTANTIATE(T,BlackOilIndices<0u,0u,0u,0u,false,true,2u,0u>)             \
-    INSTANTIATE(T,BlackOilIndices<1u,0u,0u,0u,true,false,0u,0u>)
-
-INSTANTIATE_TYPE(double)
+INSTANTIATE_TYPE_INDICES(MultisegmentWellPrimaryVariables, double)
 
 #if FLOW_INSTANTIATE_FLOAT
-INSTANTIATE_TYPE(float)
+INSTANTIATE_TYPE_INDICES(MultisegmentWellPrimaryVariables, float)
 #endif
 
 }
