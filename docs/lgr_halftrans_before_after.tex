@@ -1,0 +1,212 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{xcolor}
+
+\geometry{margin=3cm}
+
+\title{Half-Transmissibility at LGR Coarse--Fine Interfaces:\\Before and After}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+% ------------------------------------------------------------------
+\section*{Notation}
+% ------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{cl}
+\toprule
+Symbol & Meaning \\
+\midrule
+$\mathbf{x}_C$      & centroid of the coarse cell $C$ \\
+$\mathbf{x}_L$      & centroid of the fine (LGR) cell $L$ \\
+$\mathbf{x}_{F_C}$  & centre of the parent face $F_C$
+                       (full face of $C$ before LGR subdivision) \\
+$\mathbf{x}_{F_L}$  & centre of the sub-face $F_L$
+                       (the actual face shared by $C$ and $L$) \\
+$\hat{\mathbf{n}}$  & unit outward normal to the interface \\
+$d_\perp$           & perpendicular distance from $\mathbf{x}_C$
+                       to the face plane:
+                       $d_\perp = (\mathbf{x}_{F_L}-\mathbf{x}_C)
+                       \cdot\hat{\mathbf{n}}$ \\
+$A_L$               & area of sub-face $F_L$ \\
+$k_C,\;k_L$         & permeability of $C$ and $L$ normal to the face \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bigskip
+
+% ------------------------------------------------------------------
+\section*{The TPFA formula}
+% ------------------------------------------------------------------
+
+For any cell--face pair the half-transmissibility is
+\begin{equation}
+  T_\mathrm{half} \;=\; k\;\frac{A\;|\mathbf{d}\cdot\hat{\mathbf{n}}|}
+                                 {|\mathbf{d}|^{2}},
+\end{equation}
+where $\mathbf{d}$ is the vector from the cell centroid to the face
+point used in the computation.  Writing $\mathbf{d} =
+d_\perp\,\hat{\mathbf{n}} + \mathbf{d}_\parallel$ gives
+\begin{equation}
+  T_\mathrm{half} \;=\; k\;\frac{A\;d_\perp}
+                                 {d_\perp^2 + |\mathbf{d}_\parallel|^2}.
+\end{equation}
+When $\mathbf{d}_\parallel = \mathbf{0}$ this reduces to the
+K-orthogonal formula $k A / d_\perp$.
+
+The interface transmissibility is the harmonic mean:
+\begin{equation}
+  T_{CL} \;=\;
+  \left(\frac{1}{T_{\mathrm{half},C}}+\frac{1}{T_{\mathrm{half},L}}\right)^{-1}.
+\end{equation}
+
+% ------------------------------------------------------------------
+\section*{Before}
+% ------------------------------------------------------------------
+
+The coarse cell used the \textbf{parent face centre} $\mathbf{x}_{F_C}$;
+the fine cell used its own sub-face centre $\mathbf{x}_{F_L}$.
+
+\begin{align}
+  \mathbf{d}_C^{\,\text{before}} &= \mathbf{x}_{F_C} - \mathbf{x}_C, \\[6pt]
+  \mathbf{d}_L                   &= \mathbf{x}_{F_L} - \mathbf{x}_L.
+\end{align}
+
+\begin{align}
+  T_{\mathrm{half},C}^{\,\text{before}}
+    &= k_C\;\frac{A_L\;\bigl|(\mathbf{x}_{F_C}-\mathbf{x}_C)
+                              \cdot\hat{\mathbf{n}}\bigr|}
+                 {|\mathbf{x}_{F_C}-\mathbf{x}_C|^{2}},
+    \label{eq:Tbefore_C}\\[10pt]
+  T_{\mathrm{half},L}^{\,\text{before}}
+    &= k_L\;\frac{A_L\;\bigl|(\mathbf{x}_{F_L}-\mathbf{x}_L)
+                              \cdot\hat{\mathbf{n}}\bigr|}
+                 {|\mathbf{x}_{F_L}-\mathbf{x}_L|^{2}}.
+    \label{eq:Tbefore_L}
+\end{align}
+
+\medskip
+\noindent\textbf{Behaviour.}
+On a Cartesian grid $\mathbf{x}_{F_C}$ lies directly in front of
+$\mathbf{x}_C$, so $\mathbf{d}_\parallel = \mathbf{0}$ and
+$T_{\mathrm{half},C}^{\,\text{before}} = k_C A_L / d_\perp$.
+On a non-Cartesian grid $\mathbf{x}_{F_C}$ is laterally displaced from
+$\mathbf{x}_C$, introducing a tangential component and a small error.
+Because that displacement differs from one coarse cell to another, the
+result was \textbf{not symmetric} across the LGR boundary on irregular
+grids.
+
+% ------------------------------------------------------------------
+\section*{After}
+% ------------------------------------------------------------------
+
+The coarse cell now uses only the \textbf{perpendicular component} of
+the distance to the face plane; the fine cell is unchanged.
+
+\begin{align}
+  d_\perp
+    &= (\mathbf{x}_{F_L}-\mathbf{x}_C)\cdot\hat{\mathbf{n}}, \\[6pt]
+  \mathbf{d}_C^{\,\text{after}}
+    &= d_\perp\,\hat{\mathbf{n}}, \label{eq:dafter_C}\\[6pt]
+  \mathbf{d}_L
+    &= \mathbf{x}_{F_L} - \mathbf{x}_L.
+\end{align}
+
+\begin{align}
+  T_{\mathrm{half},C}^{\,\text{after}}
+    &= k_C\;\frac{A_L\;d_\perp}{d_\perp^{2}}
+     = \frac{k_C\,A_L}{d_\perp}
+     = \frac{k_C\,A_L}
+            {(\mathbf{x}_{F_L}-\mathbf{x}_C)\cdot\hat{\mathbf{n}}},
+    \label{eq:Tafter_C}\\[10pt]
+  T_{\mathrm{half},L}^{\,\text{after}}
+    &= k_L\;\frac{A_L\;\bigl|(\mathbf{x}_{F_L}-\mathbf{x}_L)
+                              \cdot\hat{\mathbf{n}}\bigr|}
+                 {|\mathbf{x}_{F_L}-\mathbf{x}_L|^{2}}.
+    \label{eq:Tafter_L}
+\end{align}
+
+\medskip
+\noindent\textbf{Behaviour.}
+By construction $\mathbf{d}_\parallel = \mathbf{0}$, so the K-orthogonal
+formula is recovered on every grid.
+The value $d_\perp$ is the distance from $\mathbf{x}_C$ to the face
+\emph{plane}: it is the same for every sub-face of the same parent face,
+so $T_{\mathrm{half},C}^{\,\text{after}}$ is \textbf{identical for all
+sub-faces} (symmetry guaranteed).
+Note that $T_{\mathrm{half},L}$ is \textbf{unchanged}.
+
+% ------------------------------------------------------------------
+\section*{Comparison}
+% ------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+ & \textbf{Before} & \textbf{After} \\
+\midrule
+Face point for $C$
+  & $\mathbf{x}_{F_C}$ (parent face centre)
+  & $d_\perp\,\hat{\mathbf{n}}$ (normal projection) \\[4pt]
+Face point for $L$
+  & $\mathbf{x}_{F_L}$
+  & $\mathbf{x}_{F_L}$ \quad (unchanged) \\[4pt]
+$\mathbf{d}_\parallel = \mathbf{0}$ for $C$
+  & Cartesian grids only
+  & Always \\[4pt]
+$T_{\mathrm{half},C} = k_C A_L / d_\perp$
+  & Cartesian grids only
+  & Always \\[4pt]
+Same $T_{\mathrm{half},C}$ for all sub-faces
+  & Always
+  & Always \\[4pt]
+Symmetric on non-Cartesian grids
+  & No
+  & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ------------------------------------------------------------------
+\section*{Numerical example: HORIZONTAL-WELL-REFINED}
+% ------------------------------------------------------------------
+
+\begin{center}
+$\Delta x = 300\,\text{m}$, \quad
+$\Delta z = 25\,\text{m}$, \quad
+LGR with $2\times$ I-refinement.
+\end{center}
+
+At the K-direction coarse--fine interface:
+\[
+  d_\perp = \frac{\Delta z}{2} = 12.5\,\text{m}, \qquad
+  |\mathbf{d}_\parallel^{\text{before}}|
+    = 0\,\text{m} \quad \text{(Cartesian grid)}.
+\]
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & $|\mathbf{d}_C|^2\;[\mathrm{m}^2]$
+ & $T_{\mathrm{half},C}$
+ & Symmetric? \\
+\midrule
+Before & $12.5^2 = 156$ & $k_C A_L / 12.5$ & No (non-Cartesian) \\
+After  & $12.5^2 = 156$ & $k_C A_L / 12.5$ & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip\noindent
+For this Cartesian test case the transmissibility value is the same
+before and after; the gain is the restoration of symmetry on non-Cartesian
+grids and the elimination of the asymmetry bug.
+
+\end{document}

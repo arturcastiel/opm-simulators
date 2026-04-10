@@ -1016,33 +1016,38 @@ computeFaceProperties(const Intersection& intersection,
     }
     else {
         if ((intersection.inside().level() != intersection.outside().level())) {
-            // For CpGrid with LGRs, intersection laying on the boundary of an LGR, having two neighboring cells:
-            // one coarse neighboring cell and one refined neighboring cell, we get the corresponding parent
-            // intersection (from level 0), and use the center of the parent intersection for the coarse
-            // neighboring cell.
+            // For CpGrid with LGRs, intersection on the boundary of an LGR with one coarse and
+            // one refined neighbour.
+            //
+            // Both cells start from the actual sub-face centre (geometrically consistent TPFA).
+            // For the coarse cell we then project that sub-face centre onto the face-normal
+            // direction from the coarse centroid.  This removes the in-plane (tangential)
+            // component of the distance vector so that
+            //
+            //   T_half_C = k · A / d_⊥   (K-orthogonal formula)
+            //
+            // instead of the penalised   k · A · d_⊥ / |d|²   that would arise when
+            // d_tang ≫ d_⊥ (typical for layered reservoirs where DX ≫ DZ with I-direction
+            // LGR refinement).  The projected distance is identical for every sub-face of
+            // the same parent face, so the result is also symmetric.
+            inside.faceCenter  = grid_.faceCenterEcl(inside.elemIdx,  inside.faceIdx,  intersection);
+            outside.faceCenter = grid_.faceCenterEcl(outside.elemIdx, outside.faceIdx, intersection);
 
-            // Get parent intersection and its geometry
-            const auto& parentIntersection =
-                grid_.getParentIntersectionFromLgrBoundaryFace(intersection);
-            const auto& parentIntersectionGeometry = parentIntersection.geometry();
-
-            // For the coarse neighboring cell, take the center of the parent intersection.
-            // For the refined neighboring cell, take the 'usual' center.
-            inside.faceCenter =  (intersection.inside().level() == 0)
-                ? parentIntersectionGeometry.center()
-                : grid_.faceCenterEcl(inside.elemIdx, inside.faceIdx, intersection);
-            outside.faceCenter = (intersection.outside().level() == 0)
-                ?  parentIntersectionGeometry.center()
-                : grid_.faceCenterEcl(outside.elemIdx, outside.faceIdx, intersection);
-
-            // For some computations, it seems to be benefitial to replace the actual area of the refined face, by
-            // the area of its parent face.
-            // faceAreaNormal = parentIntersection.centerUnitOuterNormal();
-            // faceAreaNormal *= parentIntersectionGeometry.volume();
-
-            /// Alternatively, the actual area of the refined face can be computed as follows:
             faceAreaNormal = intersection.centerUnitOuterNormal();
             faceAreaNormal *= intersection.geometry().volume();
+
+            // Project the coarse cell's face centre: remove the tangential part of d.
+            const auto nhat = intersection.centerUnitOuterNormal(); // unit face normal
+            auto projectCoarseFaceCenter = [&](DimVector& faceCenter, unsigned elemIdx) {
+                const auto d = distanceVector_(faceCenter, elemIdx);
+                const Scalar d_perp = Dune::dot(d, nhat);
+                for (unsigned k = 0; k < dimWorld; ++k)
+                    faceCenter[k] -= d[k] - d_perp * nhat[k]; // subtract tangential component
+            };
+            if (intersection.inside().level() == 0)
+                projectCoarseFaceCenter(inside.faceCenter,  inside.elemIdx);
+            else
+                projectCoarseFaceCenter(outside.faceCenter, outside.elemIdx);
         }
         else {
             assert(intersection.inside().level() == intersection.outside().level());
