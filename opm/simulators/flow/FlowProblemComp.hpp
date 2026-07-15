@@ -405,6 +405,11 @@ public:
     const InitialFluidState& initialFluidState(unsigned globalDofIdx) const
     { return initialFluidStates_[globalDofIdx]; }
 
+    //! whether the initial fluid states carry deck-given total mole
+    //! fractions (ZMF) rather than per-phase compositions
+    bool zmfInitialization() const
+    { return zmf_initialization_; }
+
     std::vector<InitialFluidState>& initialFluidStates()
     { return initialFluidStates_; }
 

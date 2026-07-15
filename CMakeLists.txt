@@ -893,6 +893,18 @@ macro(opm-simulators_targets_hook)
       opmsimulators
   )
 
+  # the isenthalpic (P-H) variant: temperature is reconstructed per cell from
+  # a specified enthalpy instead of being read from the deck
+  opm_add_executable(
+    TARGET
+      flowexp_comp_ph
+    SOURCES
+      flowexperimental/comp/flowexp_comp_ph.cpp
+      $<TARGET_OBJECTS:moduleVersion>
+    LIBRARIES
+      opmsimulators
+  )
+
   # One translation unit per (component, water) combination, each defining a
   # single explicit specialization of dispatchFlowComp<>. Instantiating one
   # configuration per file keeps per-process compile memory bounded and lets
