@@ -237,9 +237,27 @@ private:
         Dune::FieldVector<Scalar, numComponents> z(0.0);
 
         if (this->zmfInitialization()) {
-            for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
+            // apply the IDENTICAL transformation the intensive quantities
+            // apply when they rebuild z from the primary variables (last
+            // component as the complement, clamp, renormalize): a deck ZMF
+            // that does not sum exactly to one would otherwise flash a
+            // different composition for H_spec than the model later
+            // inverts, producing a systematic t=0 temperature offset with
+            // a small residual — silently defeating the flashTemperature
+            // vs. deck-temperature acceptance check
+            Scalar lastZ = 1.0;
+            for (unsigned compIdx = 0; compIdx < numComponents - 1; ++compIdx) {
                 z[compIdx] = initialFs.moleFraction(compIdx);
+                lastZ -= z[compIdx];
             }
+            z[numComponents - 1] = lastZ;
+
+            Scalar sumz = 0.0;
+            for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
+                z[compIdx] = std::max(z[compIdx], Scalar{1e-8});
+                sumz += z[compIdx];
+            }
+            z /= sumz;
             return z;
         }
 

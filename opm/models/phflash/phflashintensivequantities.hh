@@ -175,9 +175,12 @@ public:
 
         /////////////
         // The P-H flash: invert the mixture enthalpy for the temperature.
-        // The solver seeds Wilson K-values and L internally at every trial
-        // temperature (its documented input contract), so no K/L hints are
-        // wired here; hint-based warm starts are a later optimization.
+        // The solver manages its own seeding internally (Wilson cold
+        // starts plus proximity-gated warm K reuse BETWEEN its trial
+        // temperatures, with the phase-stability test forced on every
+        // trial), so no K/L hints are wired here; CROSS-call warm starts
+        // (reusing the previous Newton iteration's solution) remain a
+        // later optimization.
         /////////////
         const Scalar hSpec = problem.specifiedEnthalpy(elemCtx, dofIdx, timeIdx); // molar [J/mol]
         const auto& cfg = problem.phFlashConfig();
