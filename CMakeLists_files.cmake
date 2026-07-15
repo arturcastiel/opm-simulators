@@ -493,6 +493,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_parallel_wbp_sourcevalues.cpp
   tests/test_parallelwellinfo.cpp
   tests/test_partitionCells.cpp
+  tests/test_phflash_reference.cpp
   tests/test_preconditionerfactory.cpp
   tests/test_privarspacking.cpp
   tests/test_propertytree.cpp
