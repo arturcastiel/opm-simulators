@@ -528,7 +528,11 @@ protected:
         if (has_temp) {
             tempiData = fp.get_double("TEMPI");
         } else {
-            ; // TODO: throw?
+            // an absent TEMPI would be read out of bounds below (the assert
+            // is debug-only); the compositional initial state has no other
+            // temperature source, so this is an input error, not a default
+            throw std::runtime_error("compositional initialization requires the TEMPI keyword: "
+                                     "no initial temperature field in the deck");
         }
 
         if (gas_active) // && FluidSystem::phaseIsActive(oilPhaseIdx))
