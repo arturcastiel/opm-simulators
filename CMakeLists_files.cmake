@@ -89,6 +89,7 @@ list (APPEND MAIN_SOURCE_FILES
   opm/models/io/vtkmultiphaseparams.cpp
   opm/models/io/vtkphasepresenceparams.cpp
   opm/models/io/vtkprimaryvarsparams.cpp
+  opm/models/io/vtkphflashparams.cpp
   opm/models/io/vtkptflashparams.cpp
   opm/models/io/vtktemperatureparams.cpp
   opm/models/io/vtktpsaparams.cpp
@@ -891,6 +892,8 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/models/io/vtkphasepresenceparams.hpp
   opm/models/io/vtkprimaryvarsmodule.hpp
   opm/models/io/vtkprimaryvarsparams.hpp
+  opm/models/io/vtkphflashmodule.hpp
+  opm/models/io/vtkphflashparams.hpp
   opm/models/io/vtkptflashmodule.hpp
   opm/models/io/vtkptflashparams.hpp
   opm/models/io/vtkscalarfunction.hh
@@ -919,6 +922,9 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/models/parallel/tasklets.hpp
   opm/models/parallel/threadedentityiterator.hh
   opm/models/parallel/threadmanager.hpp
+  opm/models/phflash/phflashintensivequantities.hh
+  opm/models/phflash/phflashmodel.hh
+  opm/models/phflash/phflashparameters.hh
   opm/models/ptflash/flashindices.hh
   opm/models/ptflash/flashintensivequantities.hh
   opm/models/ptflash/flashlocalresidual.hh

@@ -34,9 +34,38 @@
 
 namespace Opm::Properties {
 
-//! The type of the flash constraint solver
+/*!
+ * \brief The type of the flash constraint solver.
+ *
+ * NOTE: this property is duck-typed — its call contract is defined by the
+ * consuming IntensiveQuantities, and two distinct contracts already exist:
+ * - the NCP-based flash model calls
+ *   FlashSolver::guessInitial(fluidState, globalMolarities) and
+ *   FlashSolver::solve<MaterialLaw>(fluidState, matParams, paramCache,
+ *   globalMolarities, tolerance)
+ *   (see opm/models/flash/flashintensivequantities.hh);
+ * - the PT flash model calls
+ *   FlashSolver::solve(fluidState, twoPhaseMethod, tolerance, eosType,
+ *   verbosity)
+ *   (see opm/models/ptflash/flashintensivequantities.hh).
+ * A binding must match the contract of the model consuming it; do not add a
+ * third meaning to this property.
+ */
 template<class TypeTag, class MyTypeTag>
 struct FlashSolver { using type = UndefinedProperty; };
+
+/*!
+ * \brief The type of the isenthalpic (P-H) flash solver used by the PH flash
+ *        model.
+ *
+ * Deliberately a separate property from FlashSolver: the P-H solver's
+ * contract differs (the specified quantity is enthalpy, not temperature).
+ * Expected contract: a nested Config type and
+ * solve(fluidState, hSpec, config, twoPhaseMethod, ptTolerance, eosType,
+ * verbosity) returning bool (false = no solution on the bracket).
+ */
+template<class TypeTag, class MyTypeTag>
+struct PhFlashSolver { using type = UndefinedProperty; };
 
 } // namespace Opm::Properties
 
