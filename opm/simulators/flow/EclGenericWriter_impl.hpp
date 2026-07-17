@@ -562,6 +562,13 @@ computeTrans_(const std::vector<std::unordered_map<int,int>>&  levelCartToLevelC
                 continue;
             }
 
+            if (isDualPorosityTwin_(originCartIdxIn, originCartIdxOut)) {
+                // The matrix-fracture coupling is always an NNC for the
+                // purpose of file output — the twin cells are neighbours
+                // only in the doubled Cartesian bookkeeping.
+                continue;
+            }
+
             const auto minLevelCartIdx = std::min(levelCartIdxIn, levelCartIdxOut);
             const auto maxLevelCartIdx = std::max(levelCartIdxIn, levelCartIdxOut);
 
@@ -606,6 +613,23 @@ isCartesianNeighbour_(const std::array<int,3>& levelCartDims,
     return (diff == 1)
         || (diff == levelCartDims[0])
         || (diff == (levelCartDims[0] * levelCartDims[1]));
+}
+
+template<class Grid, class EquilGrid, class GridView, class ElementMapper, class Scalar>
+bool
+EclGenericWriter<Grid,EquilGrid,GridView,ElementMapper,Scalar>::
+isDualPorosityTwin_(const std::size_t cartIdx1, const std::size_t cartIdx2) const
+{
+    // Matrix cell and its fracture twin: exactly half the doubled Cartesian
+    // space apart, with the smaller index in the matrix half.
+    if (! this->eclState_.runspec().dualPorosity()) {
+        return false;
+    }
+
+    const std::size_t half = this->eclState_.getInputGrid().getCartesianSize() / 2;
+    const auto lo = std::min(cartIdx1, cartIdx2);
+    const auto hi = std::max(cartIdx1, cartIdx2);
+    return (lo < half) && (hi - lo == half);
 }
 
 template<class Grid, class EquilGrid, class GridView, class ElementMapper, class Scalar>
@@ -854,7 +878,8 @@ exportNncStructure_(const std::vector<std::unordered_map<int,int>>& levelCartToL
         assert (entry.cell2 >= entry.cell1);
 
         if (! isCartesianNeighbour_(level0CartDims, entry.cell1, entry.cell2) ||
-            isNumAquConn_(entry.cell1, entry.cell2))
+            isNumAquConn_(entry.cell1, entry.cell2) ||
+            isDualPorosityTwin_(entry.cell1, entry.cell2))
         {
             bool foundNncEdit = false;
             auto trans = entry.trans;
