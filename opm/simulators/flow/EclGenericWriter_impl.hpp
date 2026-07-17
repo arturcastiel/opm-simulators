@@ -620,16 +620,15 @@ bool
 EclGenericWriter<Grid,EquilGrid,GridView,ElementMapper,Scalar>::
 isDualPorosityTwin_(const std::size_t cartIdx1, const std::size_t cartIdx2) const
 {
-    // Matrix cell and its fracture twin: exactly half the doubled Cartesian
-    // space apart, with the smaller index in the matrix half.
     if (! this->eclState_.runspec().dualPorosity()) {
         return false;
     }
 
-    const std::size_t half = this->eclState_.getInputGrid().getCartesianSize() / 2;
+    const auto& inputGrid = this->eclState_.getInputGrid();
     const auto lo = std::min(cartIdx1, cartIdx2);
     const auto hi = std::max(cartIdx1, cartIdx2);
-    return (lo < half) && (hi - lo == half);
+    return inputGrid.isFractureCell(hi) && !inputGrid.isFractureCell(lo)
+        && inputGrid.matrixTwin(hi) == lo;
 }
 
 template<class Grid, class EquilGrid, class GridView, class ElementMapper, class Scalar>

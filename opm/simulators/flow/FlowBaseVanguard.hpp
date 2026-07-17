@@ -363,33 +363,27 @@ protected:
         ElementMapper elemMapper(this->gridView(), Dune::mcmgElementLayout());
 
         const auto num_aqu_cells = this->allAquiferCells();
+        const bool dualPorosity = this->eclState().runspec().dualPorosity();
+        const auto& inputGrid = this->eclState().getInputGrid();
 
         for(const auto& element : elements(this->gridView())) {
             const unsigned int elemIdx = elemMapper.index(element);
             cellCenterDepth_[elemIdx] = cellCenterDepth(element);
+            const unsigned int global_index = cartesianIndex(elemIdx);
 
             if (!num_aqu_cells.empty()) {
-                const unsigned int global_index = cartesianIndex(elemIdx);
                 const auto search = num_aqu_cells.find(global_index);
                 if (search != num_aqu_cells.end()) {
                     // updating the cell depth using aquifer cell depth
                     cellCenterDepth_[elemIdx] = search->second->depth;
                 }
             }
-        }
 
-        // Dual porosity: fracture cells are co-located with their matrix
-        // twins — the input grid carries the twin's depth (the geometric
-        // stacking of the fracture half is bookkeeping only).
-        if (this->eclState().runspec().dualPorosity()) {
-            const auto& inputGrid = this->eclState().getInputGrid();
-            const std::size_t dpHalf = inputGrid.getCartesianSize() / 2;
-            for (const auto& element : elements(this->gridView())) {
-                const unsigned int elemIdx = elemMapper.index(element);
-                const auto global_index = static_cast<std::size_t>(cartesianIndex(elemIdx));
-                if (global_index >= dpHalf) {
-                    cellCenterDepth_[elemIdx] = inputGrid.getCellDepth(global_index);
-                }
+            // Dual porosity: fracture cells are co-located with their matrix
+            // twins — the input grid carries the twin's depth (the geometric
+            // stacking of the fracture half is bookkeeping only).
+            if (dualPorosity && inputGrid.isFractureCell(global_index)) {
+                cellCenterDepth_[elemIdx] = inputGrid.getCellDepth(global_index);
             }
         }
     }
