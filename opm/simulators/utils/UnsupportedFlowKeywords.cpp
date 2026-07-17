@@ -135,7 +135,6 @@ const KeywordValidation::UnsupportedKeywords& unsupportedKeywords()
         {"DISPDIMS", {true, std::nullopt}},
         {"DISPERSE", {true, std::nullopt}},
         {"DOMAINS", {true, std::nullopt}},
-        {"DPGRID", {true, std::nullopt}},
         {"DPKRMOD", {true, std::nullopt}},
         {"DPNUM", {true, std::nullopt}},
         {"DR", {true, std::string{"Use the DRV keyword instead"}}},

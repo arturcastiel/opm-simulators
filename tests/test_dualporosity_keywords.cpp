@@ -28,7 +28,7 @@
 BOOST_AUTO_TEST_CASE(DualPorositySubsetNotBlocked)
 {
     const auto& blocked = Opm::FlowKeywordValidation::unsupportedKeywords();
-    for (const auto* kw : {"DUALPORO", "NODPPM", "SIGMA", "SIGMAV"}) {
+    for (const auto* kw : {"DUALPORO", "NODPPM", "SIGMA", "SIGMAV", "DPGRID"}) {
         BOOST_CHECK_MESSAGE(blocked.find(kw) == blocked.end(),
                             std::string{kw} + " must not be in the unsupported-keyword list");
     }
