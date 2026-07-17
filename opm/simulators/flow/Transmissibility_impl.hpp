@@ -503,6 +503,19 @@ update(bool global, const TransUpdateQuantities update_quantities,
                                                            faceIdToDir(inside.faceIdx));
                 }
 
+                // Dual porosity (single permeability): the matrix and fracture
+                // halves never connect through grid faces (their coupling comes
+                // exclusively through the input NNCs), and the matrix half has
+                // no internal flow.
+                if (eclState_.runspec().dualPorosity()) {
+                    const std::size_t dpHalf = static_cast<std::size_t>(cartDims[0])
+                        * cartDims[1] * cartDims[2] / 2;
+                    const bool insideFracture  = static_cast<std::size_t>(inside.cartElemIdx)  >= dpHalf;
+                    const bool outsideFracture = static_cast<std::size_t>(outside.cartElemIdx) >= dpHalf;
+                    if (insideFracture != outsideFracture || !insideFracture)
+                        trans = 0.0;
+                }
+
                 transMap.insert_or_assign(details::isId(inside.elemIdx, outside.elemIdx), trans);
 
                 // update the "thermal half transmissibility" for the intersection
@@ -631,10 +644,35 @@ extractPermeability_()
 
         // for now we don't care about non-diagonal entries
 
+        this->applyDualPorosityPermScaling_();
     }
     else
         throw std::logic_error("Can't read the intrinsic permeability from the ecl state. "
                                "(The PERM{X,Y,Z} keywords are missing)");
+}
+
+template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>
+void Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::
+applyDualPorosityPermScaling_()
+{
+    // Dual porosity: the effective fracture permeability is scaled by the
+    // fracture porosity unless the run disables that scaling. Matrix cells
+    // are untouched, and so is the matrix-fracture coupling transmissibility
+    // (it is computed from the matrix permeability upstream and arrives here
+    // as an input NNC).
+    const auto& rspec = eclState_.runspec();
+    if (!rspec.dualPorosity() || rspec.fracturePermeabilityScalingDisabled())
+        return;
+
+    const auto& fp = eclState_.fieldProps();
+    const std::vector<double>& poroData = this->lookUpData_.assignFieldPropsDoubleOnLeaf(fp, "PORO");
+    const auto& cartDims = cartMapper_.cartesianDimensions();
+    const std::size_t dpHalf = static_cast<std::size_t>(cartDims[0]) * cartDims[1] * cartDims[2] / 2;
+
+    for (std::size_t dofIdx = 0; dofIdx < permeability_.size(); ++dofIdx) {
+        if (static_cast<std::size_t>(cartMapper_.cartesianIndex(dofIdx)) >= dpHalf)
+            permeability_[dofIdx] *= poroData[dofIdx];
+    }
 }
 
 template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>
@@ -678,6 +716,8 @@ extractPermeability_(const std::function<unsigned int(unsigned int)>& map)
         }
 
         // for now we don't care about non-diagonal entries
+
+        this->applyDualPorosityPermScaling_();
     }
     else {
         throw std::logic_error("Can't read the intrinsic permeability from the ecl state. "
