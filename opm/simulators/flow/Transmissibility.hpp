@@ -263,7 +263,7 @@ protected:
 
     void extractPermeability_(const std::function<unsigned int(unsigned int)>& map);
 
-    void applyDualPorosityPermScaling_();
+    void applyDualPorosityPermScaling_(const std::function<unsigned int(unsigned int)>& map);
 
     void computeDualPorosityGravityDrainageTrans_(const std::unordered_map<std::size_t,int>& globalToLocal);
 

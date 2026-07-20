@@ -96,14 +96,14 @@ PERMX
 PERMY
  4*1.0 4*1000.0 /
 PERMZ
- 4*1.0 4*1000.0 /
+ 4*0.5 4*500.0 /
 SIGMA
  0.12 /
 )" + (gravdr ? std::string{"SIGMAGD\n 0.05 /\n"} : std::string{}) + "END";
     return Parser{}.parseString(deckData);
 }
 
-Deck singlePorosityDeck(double permMd, double poro, double topDepth)
+Deck singlePorosityDeck(double permMd, double permzMd, double poro, double topDepth)
 {
     // The 2x1x2 single-porosity analogue of one half of the dual-continuum
     // grid: identical cell boxes, one permeability, one porosity.  The
@@ -132,7 +132,7 @@ PERMX
 PERMY
  4*)" + std::to_string(permMd) + R"( /
 PERMZ
- 4*)" + std::to_string(permMd) + R"( /
+ 4*)" + std::to_string(permzMd) + R"( /
 END)";
     return Parser{}.parseString(deckData);
 }
@@ -185,6 +185,21 @@ TransResult computeTrans(bool nodppm, bool dualperm = false, bool gravdr = false
 // matrix PERMX (1 mD, SI) * bulk volume (1e5 m3) * sigma (0.12 1/m2).
 constexpr double expectedCoupling = 9.869232667160130e-16 * 1.0e5 * 0.12;
 
+// No non-zero entry may cross the halves except an exact twin pair.
+void checkOnlySameHalfOrTwin(const TransResult& res)
+{
+    for (const auto& t : res.byId) {
+        if (t.second != 0.0) {
+            const auto elements = details::isIdReverse(t.first);
+            const auto g1 = static_cast<std::size_t>(std::min(elements.first, elements.second));
+            const auto g2 = static_cast<std::size_t>(std::max(elements.first, elements.second));
+            const bool sameHalf = (g1 < 4) == (g2 < 4);
+            const bool twinPair = (g2 - g1 == 4);
+            BOOST_CHECK(sameHalf || twinPair);
+        }
+    }
+}
+
 } // anonymous namespace
 
 BOOST_AUTO_TEST_CASE(DualPorosityTransPolicy)
@@ -207,18 +222,7 @@ BOOST_AUTO_TEST_CASE(DualPorosityTransPolicy)
         BOOST_CHECK_CLOSE(res.trans(g, g + 4), expectedCoupling, 1e-4);
     }
 
-    // Nothing else crosses the halves: any non-zero entry is either a
-    // same-half neighbour or an exact twin pair.
-    for (const auto& t : res.byId) {
-        if (t.second != 0.0) {
-            const auto elements = details::isIdReverse(t.first);
-            const auto g1 = static_cast<std::size_t>(std::min(elements.first, elements.second));
-            const auto g2 = static_cast<std::size_t>(std::max(elements.first, elements.second));
-            const bool sameHalf = (g1 < 4) == (g2 < 4);
-            const bool twinPair = (g2 - g1 == 4);
-            BOOST_CHECK(sameHalf || twinPair);
-        }
-    }
+    checkOnlySameHalfOrTwin(res);
 }
 
 BOOST_AUTO_TEST_CASE(DualPorosityPermScaling)
@@ -246,7 +250,7 @@ BOOST_AUTO_TEST_CASE(DualPermeabilityTransPolicy)
     // value must equal the corresponding connection of a single-porosity
     // grid with the same cell boxes, permeability and porosity.
     // Matrix half occupies depths 2000-2020 in the doubled grid.
-    const auto spMatrix = computeTransFromDeck(singlePorosityDeck(1.0, 0.20, 2000.0));
+    const auto spMatrix = computeTransFromDeck(singlePorosityDeck(1.0, 0.5, 0.20, 2000.0));
     for (const auto& [c1, c2] : {std::pair<std::size_t,std::size_t>{0,1}, {2,3}, {0,2}, {1,3}}) {
         BOOST_CHECK_GT(res.trans(c1, c2), 0.0);
         BOOST_CHECK_CLOSE(res.trans(c1, c2), spMatrix.trans(c1, c2), 1e-6);
@@ -254,7 +258,7 @@ BOOST_AUTO_TEST_CASE(DualPermeabilityTransPolicy)
 
     // The fracture half likewise matches its own single-porosity analogue.
     // Fracture half occupies depths 2020-2040 (natural stacking).
-    const auto spFracture = computeTransFromDeck(singlePorosityDeck(1000.0, 0.01, 2020.0));
+    const auto spFracture = computeTransFromDeck(singlePorosityDeck(1000.0, 500.0, 0.01, 2020.0));
     for (const auto& [c1, c2] : {std::pair<std::size_t,std::size_t>{0,1}, {2,3}, {0,2}, {1,3}}) {
         BOOST_CHECK_CLOSE(res.trans(c1 + 4, c2 + 4), spFracture.trans(c1, c2), 1e-6);
     }
@@ -264,18 +268,7 @@ BOOST_AUTO_TEST_CASE(DualPermeabilityTransPolicy)
         BOOST_CHECK_CLOSE(res.trans(g, g + 4), expectedCoupling, 1e-4);
     }
 
-    // Cross-continuum grid faces stay suppressed: any non-zero entry is a
-    // same-half neighbour or an exact twin pair.
-    for (const auto& t : res.byId) {
-        if (t.second != 0.0) {
-            const auto elements = details::isIdReverse(t.first);
-            const auto g1 = static_cast<std::size_t>(std::min(elements.first, elements.second));
-            const auto g2 = static_cast<std::size_t>(std::max(elements.first, elements.second));
-            const bool sameHalf = (g1 < 4) == (g2 < 4);
-            const bool twinPair = (g2 - g1 == 4);
-            BOOST_CHECK(sameHalf || twinPair);
-        }
-    }
+    checkOnlySameHalfOrTwin(res);
 }
 
 BOOST_AUTO_TEST_CASE(GravityDrainageCouplingTrans)
@@ -283,8 +276,10 @@ BOOST_AUTO_TEST_CASE(GravityDrainageCouplingTrans)
     const auto res = computeTrans(/*nodppm=*/true, /*dualperm=*/false, /*gravdr=*/true);
 
     // The gravity-drainage coupling transmissibility of every twin pair:
-    // matrix VERTICAL perm (1 mD, SI) * bulk volume (1e5 m3) * sigma_gd (0.05 1/m2).
-    const double expectedGd = 9.869232667160130e-16 * 1.0e5 * 0.05;
+    // matrix VERTICAL perm (0.5 mD, deliberately different from the 1 mD
+    // horizontal perm so this pins the vertical choice) * bulk volume
+    // (1e5 m3) * sigma_gd (0.05 1/m2).
+    const double expectedGd = 9.869232667160130e-16 * 0.5 * 1.0e5 * 0.05;
     for (std::size_t g = 0; g < 4; ++g) {
         BOOST_CHECK_CLOSE(res.gdTwin[g], expectedGd, 1e-4);
     }
@@ -308,7 +303,7 @@ BOOST_AUTO_TEST_CASE(MobileFractionFormulas)
 {
     using namespace Opm::DualPorosityFractions;
 
-    const WaterFractionEndPoints ep{/*swco=*/0.20, /*swcr=*/0.22, /*scohy=*/0.15, /*scrhy=*/0.25};
+    const WaterFractionEndPoints ep{.swco = 0.20, .swcr = 0.22, .scohy = 0.15, .scrhy = 0.25};
     const double swi = 0.30;
     const double xwi = initialWaterFraction(swi, ep);
     BOOST_CHECK_CLOSE(xwi, 0.1 / 0.65, 1e-10);
@@ -321,7 +316,7 @@ BOOST_AUTO_TEST_CASE(MobileFractionFormulas)
     BOOST_CHECK_EQUAL(waterFraction(1.00, swi, xwi, ep), 1.0);
     BOOST_CHECK_EQUAL(waterFraction(0.20, swi, xwi, ep), 0.0);
 
-    const GasFractionEndPoints gep{/*sgco=*/0.02, /*sgcr=*/0.05, /*slco=*/0.30, /*slcr=*/0.40};
+    const GasFractionEndPoints gep{.sgco = 0.02, .sgcr = 0.05, .slco = 0.30, .slcr = 0.40};
     const double sgi = 0.10;
     const double xgi = initialGasFraction(sgi, gep);
     BOOST_CHECK_CLOSE(xgi, 0.08 / 0.68, 1e-10);

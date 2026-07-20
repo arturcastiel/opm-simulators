@@ -663,7 +663,7 @@ computeDualPorosityGravityDrainageTrans_(const std::unordered_map<std::size_t,in
             * sigmaGd[matrixElem];
 
         if (trans > 0.0) {
-            this->dpGravDrainageTrans_.insert_or_assign(
+            this->dpGravDrainageTrans_.emplace(
                 details::isId(matrixElem, static_cast<unsigned>(elemIdx)), trans);
         }
     }
@@ -705,7 +705,7 @@ extractPermeability_()
 
         // for now we don't care about non-diagonal entries
 
-        this->applyDualPorosityPermScaling_();
+        this->applyDualPorosityPermScaling_([](const unsigned int i) { return i; });
     }
     else
         throw std::logic_error("Can't read the intrinsic permeability from the ecl state. "
@@ -714,7 +714,7 @@ extractPermeability_()
 
 template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>
 void Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::
-applyDualPorosityPermScaling_()
+applyDualPorosityPermScaling_(const std::function<unsigned int(unsigned int)>& map)
 {
     // Dual porosity: the effective fracture permeability is scaled by the
     // fracture porosity unless the run disables that scaling. Matrix cells
@@ -729,9 +729,14 @@ applyDualPorosityPermScaling_()
     const std::vector<double>& poroData = this->lookUpData_.assignFieldPropsDoubleOnLeaf(fp, "PORO");
     const auto& inputGrid = eclState_.getInputGrid();
 
-    for (std::size_t dofIdx = 0; dofIdx < permeability_.size(); ++dofIdx) {
-        if (inputGrid.isFractureCell(cartMapper_.cartesianIndex(dofIdx)))
-            permeability_[dofIdx] *= poroData[dofIdx];
+    // The porosity must be read through the same element-to-input mapping
+    // the permeability extraction used, so reordered grids scale the right
+    // cells.
+    for (std::size_t elemIdx = 0; elemIdx < permeability_.size(); ++elemIdx) {
+        const auto inputDofIdx = map(static_cast<unsigned int>(elemIdx));
+        if (inputGrid.isFractureCell(cartMapper_.cartesianIndex(elemIdx))) {
+            permeability_[elemIdx] *= poroData[inputDofIdx];
+        }
     }
 }
 
@@ -777,7 +782,7 @@ extractPermeability_(const std::function<unsigned int(unsigned int)>& map)
 
         // for now we don't care about non-diagonal entries
 
-        this->applyDualPorosityPermScaling_();
+        this->applyDualPorosityPermScaling_(map);
     }
     else {
         throw std::logic_error("Can't read the intrinsic permeability from the ecl state. "

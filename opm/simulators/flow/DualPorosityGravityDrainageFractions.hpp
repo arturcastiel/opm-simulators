@@ -19,8 +19,6 @@
 #ifndef OPM_DUAL_POROSITY_GRAVITY_DRAINAGE_FRACTIONS_HPP
 #define OPM_DUAL_POROSITY_GRAVITY_DRAINAGE_FRACTIONS_HPP
 
-#include <algorithm>
-
 namespace Opm::DualPorosityFractions {
 
 /*!
@@ -49,13 +47,24 @@ struct GasFractionEndPoints
     double slcr;    //!< critical liquid saturation
 };
 
-inline double clampFraction(const double x)
+//! The current-fraction functions are templated on the saturation value
+//! type so automatic-differentiation types flow through into the flux
+//! terms; the initial fractions and end points are plain state.
+template <class Value>
+constexpr Value clampFraction(const Value& x) noexcept
 {
-    return std::clamp(x, 0.0, 1.0);
+    if (x < 0.0) {
+        return Value(0.0);
+    }
+    if (x > 1.0) {
+        return Value(1.0);
+    }
+    return x;
 }
 
 //! Fraction of the cell initially below the water contact.
-inline double initialWaterFraction(const double swi, const WaterFractionEndPoints& ep)
+constexpr double initialWaterFraction(const double swi,
+                                      const WaterFractionEndPoints& ep) noexcept
 {
     const double denom = 1.0 - ep.scohy - ep.swco;
     if (denom <= 0.0) {
@@ -65,27 +74,29 @@ inline double initialWaterFraction(const double swi, const WaterFractionEndPoint
 }
 
 //! Current fraction of the cell containing mobile water.
-inline double waterFraction(const double sw,
-                            const double swi,
-                            const double xwi,
-                            const WaterFractionEndPoints& ep)
+template <class Value>
+constexpr Value waterFraction(const Value& sw,
+                              const double swi,
+                              const double xwi,
+                              const WaterFractionEndPoints& ep) noexcept
 {
     const double denom = (sw >= swi)
         ? 1.0 - ep.scrhy - ep.swco
         : 1.0 - ep.scohy - ep.swcr;
     if (denom <= 0.0) {
-        return xwi;
+        return Value(xwi);
     }
 
     const double offset = (sw >= swi)
         ? xwi * (ep.scrhy - ep.scohy)
         : xwi * (ep.swcr - ep.swco);
 
-    return clampFraction((sw - offset - ep.swco) / denom);
+    return clampFraction(Value((sw - offset - ep.swco) / denom));
 }
 
 //! Fraction of the cell initially above the gas contact.
-inline double initialGasFraction(const double sgi, const GasFractionEndPoints& ep)
+constexpr double initialGasFraction(const double sgi,
+                                    const GasFractionEndPoints& ep) noexcept
 {
     const double denom = 1.0 - ep.slco - ep.sgco;
     if (denom <= 0.0) {
@@ -95,23 +106,24 @@ inline double initialGasFraction(const double sgi, const GasFractionEndPoints& e
 }
 
 //! Current fraction of the cell containing mobile gas.
-inline double gasFraction(const double sg,
-                          const double sgi,
-                          const double xgi,
-                          const GasFractionEndPoints& ep)
+template <class Value>
+constexpr Value gasFraction(const Value& sg,
+                            const double sgi,
+                            const double xgi,
+                            const GasFractionEndPoints& ep) noexcept
 {
     const double denom = (sg >= sgi)
         ? 1.0 - ep.slcr - ep.sgco
         : 1.0 - ep.slco - ep.sgcr;
     if (denom <= 0.0) {
-        return xgi;
+        return Value(xgi);
     }
 
     const double offset = (sg >= sgi)
         ? xgi * (ep.slcr - ep.slco)
         : xgi * (ep.sgcr - ep.sgco);
 
-    return clampFraction((sg - offset - ep.sgco) / denom);
+    return clampFraction(Value((sg - offset - ep.sgco) / denom));
 }
 
 } // namespace Opm::DualPorosityFractions
