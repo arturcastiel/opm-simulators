@@ -377,6 +377,21 @@ protected:
                 }
             }
         }
+
+        // Dual porosity: fracture cells are co-located with their matrix
+        // twins — the input grid carries the twin's depth (the geometric
+        // stacking of the fracture half is bookkeeping only).
+        if (this->eclState().runspec().dualPorosity()) {
+            const auto& inputGrid = this->eclState().getInputGrid();
+            const std::size_t dpHalf = inputGrid.getCartesianSize() / 2;
+            for (const auto& element : elements(this->gridView())) {
+                const unsigned int elemIdx = elemMapper.index(element);
+                const auto global_index = static_cast<std::size_t>(cartesianIndex(elemIdx));
+                if (global_index >= dpHalf) {
+                    cellCenterDepth_[elemIdx] = inputGrid.getCellDepth(global_index);
+                }
+            }
+        }
     }
     void updateCellThickness_()
     {
