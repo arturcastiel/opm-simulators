@@ -180,6 +180,8 @@ update(bool global, const TransUpdateQuantities update_quantities,
     // whether only update the permeability related transmissibility
     const bool onlyTrans = (update_quantities == TransUpdateQuantities::Trans);
     const auto& cartDims = cartMapper_.cartesianDimensions();
+    const bool dualPorosity = eclState_.runspec().dualPorosity();
+    const auto& dpInputGrid = eclState_.getInputGrid();
     const auto& transMult = eclState_.getTransMult();
     const auto& comm = gridView_.comm();
     ElementMapper elemMapper(gridView_, Dune::mcmgElementLayout());
@@ -506,13 +508,11 @@ update(bool global, const TransUpdateQuantities update_quantities,
                 // Dual porosity (single permeability): the matrix and fracture
                 // halves never connect through grid faces (their coupling comes
                 // exclusively through the input NNCs), and the matrix half has
-                // no internal flow.
-                if (eclState_.runspec().dualPorosity()) {
-                    const std::size_t dpHalf = static_cast<std::size_t>(cartDims[0])
-                        * cartDims[1] * cartDims[2] / 2;
-                    const bool insideFracture  = static_cast<std::size_t>(inside.cartElemIdx)  >= dpHalf;
-                    const bool outsideFracture = static_cast<std::size_t>(outside.cartElemIdx) >= dpHalf;
-                    if (insideFracture != outsideFracture || !insideFracture)
+                // no internal flow — only fracture-fracture faces carry flow.
+                if (dualPorosity) {
+                    const bool insideFracture  = dpInputGrid.isFractureCell(inside.cartElemIdx);
+                    const bool outsideFracture = dpInputGrid.isFractureCell(outside.cartElemIdx);
+                    if (!(insideFracture && outsideFracture))
                         trans = 0.0;
                 }
 
@@ -666,11 +666,10 @@ applyDualPorosityPermScaling_()
 
     const auto& fp = eclState_.fieldProps();
     const std::vector<double>& poroData = this->lookUpData_.assignFieldPropsDoubleOnLeaf(fp, "PORO");
-    const auto& cartDims = cartMapper_.cartesianDimensions();
-    const std::size_t dpHalf = static_cast<std::size_t>(cartDims[0]) * cartDims[1] * cartDims[2] / 2;
+    const auto& inputGrid = eclState_.getInputGrid();
 
     for (std::size_t dofIdx = 0; dofIdx < permeability_.size(); ++dofIdx) {
-        if (static_cast<std::size_t>(cartMapper_.cartesianIndex(dofIdx)) >= dpHalf)
+        if (inputGrid.isFractureCell(cartMapper_.cartesianIndex(dofIdx)))
             permeability_[dofIdx] *= poroData[dofIdx];
     }
 }
