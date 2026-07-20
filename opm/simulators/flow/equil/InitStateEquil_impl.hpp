@@ -1875,6 +1875,8 @@ updateCellProps_(const EclipseState& eclipseState,
     auto elemIt = gridView.template begin</*codim=*/0>();
     const auto& elemEndIt = gridView.template end</*codim=*/0>();
     const auto num_aqu_cells = aquifer.allAquiferCells();
+    const bool dualPorosity = eclipseState.runspec().dualPorosity();
+    const auto& dpInputGrid = eclipseState.getInputGrid();
     for (; elemIt != elemEndIt; ++elemIt) {
         const Element& element = *elemIt;
         const unsigned int elemIdx = elemMapper.index(element);
@@ -1900,18 +1902,14 @@ updateCellProps_(const EclipseState& eclipseState,
         // Dual porosity: equilibrate the fracture cell at its matrix twin's
         // depth (the input grid carries it) — the geometric stacking of the
         // fracture half is bookkeeping only.
-        if (eclipseState.runspec().dualPorosity()) {
-            const auto& inputGrid = eclipseState.getInputGrid();
-            const std::size_t dpHalf = inputGrid.getCartesianSize() / 2;
-            if (static_cast<std::size_t>(cartIx) >= dpHalf) {
-                const Scalar depth_change_dp =
-                    inputGrid.getCellDepth(cartIx) - cellCenterDepth_[elemIdx];
-                cellCenterDepth_[elemIdx] += depth_change_dp;
-                cellZSpan_[elemIdx].first += depth_change_dp;
-                cellZSpan_[elemIdx].second += depth_change_dp;
-                cellZMinMax_[elemIdx].first += depth_change_dp;
-                cellZMinMax_[elemIdx].second += depth_change_dp;
-            }
+        if (dualPorosity && dpInputGrid.isFractureCell(cartIx)) {
+            const Scalar depth_change_dp =
+                dpInputGrid.getCellDepth(cartIx) - cellCenterDepth_[elemIdx];
+            cellCenterDepth_[elemIdx] += depth_change_dp;
+            cellZSpan_[elemIdx].first += depth_change_dp;
+            cellZSpan_[elemIdx].second += depth_change_dp;
+            cellZMinMax_[elemIdx].first += depth_change_dp;
+            cellZMinMax_[elemIdx].second += depth_change_dp;
         }
     }
 }
