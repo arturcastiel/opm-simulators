@@ -1511,7 +1511,7 @@ InitialStateComputer(MaterialLawManager& materialLawManager,
     // Querry cell depth, cell top-bottom.
     // numerical aquifer cells might be specified with different depths.
     const auto& num_aquifers = eclipseState.aquifer().numericalAquifers();
-    updateCellProps_(gridView, num_aquifers);
+    updateCellProps_(eclipseState, gridView, num_aquifers);
 
     // Get the equilibration records.
     const std::vector<EquilRecord> rec = getEquil(eclipseState);
@@ -1860,7 +1860,8 @@ void InitialStateComputer<FluidSystem,
                           GridView,
                           ElementMapper,
                           CartesianIndexMapper>::
-updateCellProps_(const GridView& gridView,
+updateCellProps_(const EclipseState& eclipseState,
+                 const GridView& gridView,
                  const NumericalAquifers& aquifer)
 {
     ElementMapper elemMapper(gridView, Dune::mcmgElementLayout());
@@ -1893,6 +1894,23 @@ updateCellProps_(const GridView& gridView,
                 cellZSpan_[elemIdx].second += depth_change_num_aqu;
                 cellZMinMax_[elemIdx].first += depth_change_num_aqu;
                 cellZMinMax_[elemIdx].second += depth_change_num_aqu;
+            }
+        }
+
+        // Dual porosity: equilibrate the fracture cell at its matrix twin's
+        // depth (the input grid carries it) — the geometric stacking of the
+        // fracture half is bookkeeping only.
+        if (eclipseState.runspec().dualPorosity()) {
+            const auto& inputGrid = eclipseState.getInputGrid();
+            const std::size_t dpHalf = inputGrid.getCartesianSize() / 2;
+            if (static_cast<std::size_t>(cartIx) >= dpHalf) {
+                const Scalar depth_change_dp =
+                    inputGrid.getCellDepth(cartIx) - cellCenterDepth_[elemIdx];
+                cellCenterDepth_[elemIdx] += depth_change_dp;
+                cellZSpan_[elemIdx].first += depth_change_dp;
+                cellZSpan_[elemIdx].second += depth_change_dp;
+                cellZMinMax_[elemIdx].first += depth_change_dp;
+                cellZMinMax_[elemIdx].second += depth_change_dp;
             }
         }
     }
