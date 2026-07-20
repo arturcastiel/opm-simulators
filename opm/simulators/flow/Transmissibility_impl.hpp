@@ -609,9 +609,64 @@ update(bool global, const TransUpdateQuantities update_quantities,
         warnEditNNC_ = false;
     }
 
+    this->computeDualPorosityGravityDrainageTrans_(globalToLocal);
+
     // If disableNNC == true, remove all non-neighbouring transmissibilities.
     // If disableNNC == false, remove very small non-neighbouring transmissibilities.
     this->removeNonCartesianTransmissibilities_(disableNNC);
+}
+
+template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>
+Scalar Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::
+dualPorosityGravityDrainageTrans(unsigned elemIdx1, unsigned elemIdx2) const
+{
+    const auto it = dpGravDrainageTrans_.find(details::isId(elemIdx1, elemIdx2));
+    return (it == dpGravDrainageTrans_.end()) ? 0.0 : it->second;
+}
+
+template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>
+void Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::
+computeDualPorosityGravityDrainageTrans_(const std::unordered_map<std::size_t,int>& globalToLocal)
+{
+    // The gravity-drainage coupling transmissibility of a twin pair is
+    // computed from the gravity-drainage sigma and the matrix cell's
+    // VERTICAL permeability (the sigma coupling itself uses the horizontal
+    // permeability).  It is stored alongside the regular transmissibilities
+    // so the flux terms of the gravity-drainage models can select it per
+    // connection.
+    this->dpGravDrainageTrans_.clear();
+
+    const auto& rspec = eclState_.runspec();
+    const auto& fp = eclState_.fieldProps();
+    if (!rspec.gravityDrainage() || !fp.has_double("SIGMAGDV")) {
+        return;
+    }
+
+    const auto& inputGrid = eclState_.getInputGrid();
+    const std::vector<double>& sigmaGd = this->lookUpData_.assignFieldPropsDoubleOnLeaf(fp, "SIGMAGDV");
+
+    for (const auto& [cartIdx, elemIdx] : globalToLocal) {
+        if (!inputGrid.isFractureCell(cartIdx)) {
+            continue;
+        }
+
+        const auto matrixCart = inputGrid.matrixTwin(cartIdx);
+        const auto matrixPos = globalToLocal.find(matrixCart);
+        if (matrixPos == globalToLocal.end()) {
+            continue;
+        }
+
+        const auto matrixElem = static_cast<unsigned>(matrixPos->second);
+        const Scalar permZ = permeability_[matrixElem][dimWorld - 1][dimWorld - 1];
+        const Scalar trans = permZ
+            * inputGrid.getCellVolume(matrixCart)
+            * sigmaGd[matrixElem];
+
+        if (trans > 0.0) {
+            this->dpGravDrainageTrans_.insert_or_assign(
+                details::isId(matrixElem, static_cast<unsigned>(elemIdx)), trans);
+        }
+    }
 }
 
 template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>

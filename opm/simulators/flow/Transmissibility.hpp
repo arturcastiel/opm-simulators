@@ -85,6 +85,16 @@ public:
     Scalar transmissibilityBoundary(unsigned elemIdx, unsigned boundaryFaceIdx) const;
 
     /*!
+     * \brief The gravity-drainage coupling transmissibility of a
+     *        dual-porosity twin pair.
+     *
+     * Based on the gravity-drainage sigma (SIGMAGDV) and the matrix cell's
+     * vertical permeability.  Zero when the two elements are not a twin
+     * pair or the run defines no gravity-drainage sigma.
+     */
+    Scalar dualPorosityGravityDrainageTrans(unsigned elemIdx1, unsigned elemIdx2) const;
+
+    /*!
      * \brief Return the thermal "half transmissibility" for the intersection between two
      *        elements.
      *
@@ -255,6 +265,8 @@ protected:
 
     void applyDualPorosityPermScaling_();
 
+    void computeDualPorosityGravityDrainageTrans_(const std::unordered_map<std::size_t,int>& globalToLocal);
+
     void extractPorosity_();
 
     void extractDispersion_();
@@ -284,6 +296,7 @@ protected:
     std::vector<Scalar> porosity_;
     std::vector<Scalar> dispersion_;
     std::unordered_map<std::uint64_t, Scalar> trans_;
+    std::unordered_map<std::uint64_t, Scalar> dpGravDrainageTrans_;
     const EclipseState& eclState_;
     const GridView& gridView_;
     const CartesianIndexMapper& cartMapper_;

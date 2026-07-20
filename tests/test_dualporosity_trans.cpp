@@ -32,9 +32,11 @@
 
 #include <opm/grid/CpGrid.hpp>
 
+#include <opm/simulators/flow/DualPorosityGravityDrainageFractions.hpp>
 #include <opm/simulators/flow/Transmissibility.hpp>
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <string>
 
@@ -67,7 +69,7 @@ public:
     auto getTransmissibilitymap() { return this->trans_; }
 };
 
-Deck dualContinuumDeck(bool nodppm, bool dualperm)
+Deck dualContinuumDeck(bool nodppm, bool dualperm, bool gravdr = false)
 {
     // 2x1x4: matrix cells cart 0-3 (k=0,1), fracture cells cart 4-7 (k=2,3),
     // co-located twins, sigma one field value.
@@ -77,6 +79,7 @@ WATER
 DIMENS
  2 1 4 /
 )") + (dualperm ? "DUALPERM\n" : "DUALPORO\n")
+    + (gravdr ? "GRAVDR\n" : "")
     + (nodppm ? "NODPPM\n" : "") + R"(GRID
 DX
  8*100. /
@@ -96,7 +99,7 @@ PERMZ
  4*1.0 4*1000.0 /
 SIGMA
  0.12 /
-END)";
+)" + (gravdr ? std::string{"SIGMAGD\n 0.05 /\n"} : std::string{}) + "END";
     return Parser{}.parseString(deckData);
 }
 
@@ -136,6 +139,7 @@ END)";
 
 struct TransResult {
     std::map<std::size_t, double> byId;
+    std::array<double, 4> gdTwin{};
     double trans(std::size_t c1, std::size_t c2) const {
         auto it = byId.find(details::isId(c1, c2));
         return it == byId.end() ? 0.0 : it->second;
@@ -166,12 +170,15 @@ TransResult computeTransFromDeck(const Deck& deck)
     for (const auto& t : eclTransmissibility.getTransmissibilitymap()) {
         result.byId.emplace(t.first, t.second);
     }
+    for (std::size_t g = 0; g < result.gdTwin.size(); ++g) {
+        result.gdTwin[g] = eclTransmissibility.dualPorosityGravityDrainageTrans(g, g + 4);
+    }
     return result;
 }
 
-TransResult computeTrans(bool nodppm, bool dualperm = false)
+TransResult computeTrans(bool nodppm, bool dualperm = false, bool gravdr = false)
 {
-    return computeTransFromDeck(dualContinuumDeck(nodppm, dualperm));
+    return computeTransFromDeck(dualContinuumDeck(nodppm, dualperm, gravdr));
 }
 
 // The coupling transmissibility of every twin pair:
@@ -269,6 +276,58 @@ BOOST_AUTO_TEST_CASE(DualPermeabilityTransPolicy)
             BOOST_CHECK(sameHalf || twinPair);
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(GravityDrainageCouplingTrans)
+{
+    const auto res = computeTrans(/*nodppm=*/true, /*dualperm=*/false, /*gravdr=*/true);
+
+    // The gravity-drainage coupling transmissibility of every twin pair:
+    // matrix VERTICAL perm (1 mD, SI) * bulk volume (1e5 m3) * sigma_gd (0.05 1/m2).
+    const double expectedGd = 9.869232667160130e-16 * 1.0e5 * 0.05;
+    for (std::size_t g = 0; g < 4; ++g) {
+        BOOST_CHECK_CLOSE(res.gdTwin[g], expectedGd, 1e-4);
+    }
+
+    // The regular sigma coupling is untouched by the second transmissibility.
+    for (std::size_t g = 0; g < 4; ++g) {
+        BOOST_CHECK_CLOSE(res.trans(g, g + 4), expectedCoupling, 1e-4);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(GravityDrainageCouplingTransAbsent)
+{
+    // Without a gravity-drainage request there is no second transmissibility.
+    const auto res = computeTrans(/*nodppm=*/true);
+    for (std::size_t g = 0; g < 4; ++g) {
+        BOOST_CHECK_EQUAL(res.gdTwin[g], 0.0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(MobileFractionFormulas)
+{
+    using namespace Opm::DualPorosityFractions;
+
+    const WaterFractionEndPoints ep{/*swco=*/0.20, /*swcr=*/0.22, /*scohy=*/0.15, /*scrhy=*/0.25};
+    const double swi = 0.30;
+    const double xwi = initialWaterFraction(swi, ep);
+    BOOST_CHECK_CLOSE(xwi, 0.1 / 0.65, 1e-10);
+
+    // Continuous at the initial saturation, exact on the imbibition branch,
+    // clamped at the ends.
+    BOOST_CHECK_CLOSE(waterFraction(swi, swi, xwi, ep), xwi, 1e-10);
+    BOOST_CHECK_CLOSE(waterFraction(0.50, swi, xwi, ep),
+                      (0.50 - xwi * 0.10 - 0.20) / 0.55, 1e-10);
+    BOOST_CHECK_EQUAL(waterFraction(1.00, swi, xwi, ep), 1.0);
+    BOOST_CHECK_EQUAL(waterFraction(0.20, swi, xwi, ep), 0.0);
+
+    const GasFractionEndPoints gep{/*sgco=*/0.02, /*sgcr=*/0.05, /*slco=*/0.30, /*slcr=*/0.40};
+    const double sgi = 0.10;
+    const double xgi = initialGasFraction(sgi, gep);
+    BOOST_CHECK_CLOSE(xgi, 0.08 / 0.68, 1e-10);
+    BOOST_CHECK_CLOSE(gasFraction(sgi, sgi, xgi, gep), xgi, 1e-10);
+    BOOST_CHECK_CLOSE(gasFraction(0.30, sgi, xgi, gep),
+                      (0.30 - xgi * 0.10 - 0.02) / 0.58, 1e-10);
 }
 
 int main(int argc, char** argv)

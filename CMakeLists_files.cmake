@@ -997,6 +997,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/flow/ConvergenceOutputConfiguration.hpp
   opm/simulators/flow/countGlobalCells.hpp
   opm/simulators/flow/CpGridVanguard.hpp
+  opm/simulators/flow/DualPorosityGravityDrainageFractions.hpp
   opm/simulators/flow/DummyGradientCalculator.hpp
   opm/simulators/flow/EclGenericWriter.hpp
   opm/simulators/flow/EclGenericWriter_impl.hpp
