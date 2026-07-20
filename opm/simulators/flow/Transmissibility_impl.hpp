@@ -181,6 +181,7 @@ update(bool global, const TransUpdateQuantities update_quantities,
     const bool onlyTrans = (update_quantities == TransUpdateQuantities::Trans);
     const auto& cartDims = cartMapper_.cartesianDimensions();
     const bool dualPorosity = eclState_.runspec().dualPorosity();
+    const bool dualPermeability = eclState_.runspec().dualPermeability();
     const auto& dpInputGrid = eclState_.getInputGrid();
     const auto& transMult = eclState_.getTransMult();
     const auto& comm = gridView_.comm();
@@ -505,15 +506,20 @@ update(bool global, const TransUpdateQuantities update_quantities,
                                                            faceIdToDir(inside.faceIdx));
                 }
 
-                // Dual porosity (single permeability): the matrix and fracture
-                // halves never connect through grid faces (their coupling comes
-                // exclusively through the input NNCs), and the matrix half has
-                // no internal flow — only fracture-fracture faces carry flow.
+                // Dual-continuum runs: the matrix and fracture halves never
+                // connect through grid faces (their coupling comes exclusively
+                // through the input NNCs).  Matrix-matrix faces carry flow
+                // only in dual-permeability runs; in single-permeability dual
+                // porosity the matrix half has no internal flow.
                 if (dualPorosity) {
                     const bool insideFracture  = dpInputGrid.isFractureCell(inside.cartElemIdx);
                     const bool outsideFracture = dpInputGrid.isFractureCell(outside.cartElemIdx);
-                    if (!(insideFracture && outsideFracture))
+                    if (insideFracture != outsideFracture) {
                         trans = 0.0;
+                    }
+                    else if (!insideFracture && !dualPermeability) {
+                        trans = 0.0;
+                    }
                 }
 
                 transMap.insert_or_assign(details::isId(inside.elemIdx, outside.elemIdx), trans);

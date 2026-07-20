@@ -141,7 +141,6 @@ const KeywordValidation::UnsupportedKeywords& unsupportedKeywords()
         {"DRILPRI", {true, std::nullopt}},
         {"DSPDEINT", {true, std::nullopt}},
         {"DTHETA", {true, std::string{"Use the DTHETAV keyword instead"}}},
-        {"DUALPERM", {true, std::nullopt}},
         {"DUMPCUPL", {true, std::nullopt}},
         {"DUMPFLUX", {true, std::nullopt}},
         {"DYNAMICR", {true, std::nullopt}},

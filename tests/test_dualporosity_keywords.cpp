@@ -28,7 +28,7 @@
 BOOST_AUTO_TEST_CASE(DualPorositySubsetNotBlocked)
 {
     const auto& blocked = Opm::FlowKeywordValidation::unsupportedKeywords();
-    for (const auto* kw : {"DUALPORO", "NODPPM", "SIGMA", "SIGMAV", "DPGRID"}) {
+    for (const auto* kw : {"DUALPORO", "DUALPERM", "NODPPM", "SIGMA", "SIGMAV", "DPGRID"}) {
         BOOST_CHECK_MESSAGE(blocked.find(kw) == blocked.end(),
                             std::string{kw} + " must not be in the unsupported-keyword list");
     }
@@ -38,7 +38,7 @@ BOOST_AUTO_TEST_CASE(DualPorositySubsetNotBlocked)
 BOOST_AUTO_TEST_CASE(DeferredDualContinuumKeywordsStillFatal)
 {
     const auto& blocked = Opm::FlowKeywordValidation::unsupportedKeywords();
-    for (const auto* kw : {"DUALPERM", "DZMATRIX", "DZMTRX", "DZMTRXV",
+    for (const auto* kw : {"DZMATRIX", "DZMTRX", "DZMTRXV",
                            "SIGMAGD", "SIGMAGDV", "SIGMATH", "LTOSIGMA",
                            "DPNUM", "GRAVDR", "GRAVDRM", "GRAVDRB",
                            "NMATRIX", "NMATOPTS"}) {

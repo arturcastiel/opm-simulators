@@ -67,7 +67,7 @@ public:
     auto getTransmissibilitymap() { return this->trans_; }
 };
 
-Deck dualPorosityDeck(bool nodppm)
+Deck dualContinuumDeck(bool nodppm, bool dualperm)
 {
     // 2x1x4: matrix cells cart 0-3 (k=0,1), fracture cells cart 4-7 (k=2,3),
     // co-located twins, sigma one field value.
@@ -76,8 +76,8 @@ OIL
 WATER
 DIMENS
  2 1 4 /
-DUALPORO
-)") + (nodppm ? "NODPPM\n" : "") + R"(GRID
+)") + (dualperm ? "DUALPERM\n" : "DUALPORO\n")
+    + (nodppm ? "NODPPM\n" : "") + R"(GRID
 DX
  8*100. /
 DY
@@ -100,6 +100,40 @@ END)";
     return Parser{}.parseString(deckData);
 }
 
+Deck singlePorosityDeck(double permMd, double poro, double topDepth)
+{
+    // The 2x1x2 single-porosity analogue of one half of the dual-continuum
+    // grid: identical cell boxes, one permeability, one porosity.  The
+    // analogue must sit at the SAME depth as the half it mirrors: the test
+    // harness supplies placeholder centroids, which makes the computed
+    // transmissibilities depth-sensitive, so only same-depth grids compare
+    // exactly.
+    const std::string deckData = std::string(R"(RUNSPEC
+OIL
+WATER
+DIMENS
+ 2 1 2 /
+GRID
+DX
+ 4*100. /
+DY
+ 4*100. /
+DZ
+ 4*10. /
+TOPS
+ 2*)") + std::to_string(topDepth) + " 2*" + std::to_string(topDepth + 10.0) + R"( /
+PORO
+ 4*)" + std::to_string(poro) + R"( /
+PERMX
+ 4*)" + std::to_string(permMd) + R"( /
+PERMY
+ 4*)" + std::to_string(permMd) + R"( /
+PERMZ
+ 4*)" + std::to_string(permMd) + R"( /
+END)";
+    return Parser{}.parseString(deckData);
+}
+
 struct TransResult {
     std::map<std::size_t, double> byId;
     double trans(std::size_t c1, std::size_t c2) const {
@@ -108,7 +142,7 @@ struct TransResult {
     }
 };
 
-TransResult computeTrans(bool nodppm)
+TransResult computeTransFromDeck(const Deck& deck)
 {
     using Grid = Dune::CpGrid;
     using GridView = Grid::LeafGridView;
@@ -116,7 +150,6 @@ TransResult computeTrans(bool nodppm)
     using CartesianIndexMapper = Dune::CartesianIndexMapper<Grid>;
     using Transmissibility = TestTransmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,double>;
 
-    const auto deck = dualPorosityDeck(nodppm);
     Grid grid;
     EclipseState eclState(deck);
     grid.processEclipseFormat(&eclState.getInputGrid(), &eclState, false, false, false);
@@ -134,6 +167,11 @@ TransResult computeTrans(bool nodppm)
         result.byId.emplace(t.first, t.second);
     }
     return result;
+}
+
+TransResult computeTrans(bool nodppm, bool dualperm = false)
+{
+    return computeTransFromDeck(dualContinuumDeck(nodppm, dualperm));
 }
 
 // The coupling transmissibility of every twin pair:
@@ -189,6 +227,47 @@ BOOST_AUTO_TEST_CASE(DualPorosityPermScaling)
 
     for (std::size_t g = 0; g < 4; ++g) {
         BOOST_CHECK_CLOSE(scaled.trans(g, g + 4), plain.trans(g, g + 4), 1e-6);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(DualPermeabilityTransPolicy)
+{
+    const auto res = computeTrans(/*nodppm=*/true, /*dualperm=*/true);
+
+    // Matrix-to-matrix transmissibilities are calculated from the matrix
+    // cells' permeability with the standard formulas: every matrix-matrix
+    // value must equal the corresponding connection of a single-porosity
+    // grid with the same cell boxes, permeability and porosity.
+    // Matrix half occupies depths 2000-2020 in the doubled grid.
+    const auto spMatrix = computeTransFromDeck(singlePorosityDeck(1.0, 0.20, 2000.0));
+    for (const auto& [c1, c2] : {std::pair<std::size_t,std::size_t>{0,1}, {2,3}, {0,2}, {1,3}}) {
+        BOOST_CHECK_GT(res.trans(c1, c2), 0.0);
+        BOOST_CHECK_CLOSE(res.trans(c1, c2), spMatrix.trans(c1, c2), 1e-6);
+    }
+
+    // The fracture half likewise matches its own single-porosity analogue.
+    // Fracture half occupies depths 2020-2040 (natural stacking).
+    const auto spFracture = computeTransFromDeck(singlePorosityDeck(1000.0, 0.01, 2020.0));
+    for (const auto& [c1, c2] : {std::pair<std::size_t,std::size_t>{0,1}, {2,3}, {0,2}, {1,3}}) {
+        BOOST_CHECK_CLOSE(res.trans(c1 + 4, c2 + 4), spFracture.trans(c1, c2), 1e-6);
+    }
+
+    // Twin coupling is unchanged: still exactly the sigma-NNC value.
+    for (std::size_t g = 0; g < 4; ++g) {
+        BOOST_CHECK_CLOSE(res.trans(g, g + 4), expectedCoupling, 1e-4);
+    }
+
+    // Cross-continuum grid faces stay suppressed: any non-zero entry is a
+    // same-half neighbour or an exact twin pair.
+    for (const auto& t : res.byId) {
+        if (t.second != 0.0) {
+            const auto elements = details::isIdReverse(t.first);
+            const auto g1 = static_cast<std::size_t>(std::min(elements.first, elements.second));
+            const auto g2 = static_cast<std::size_t>(std::max(elements.first, elements.second));
+            const bool sameHalf = (g1 < 4) == (g2 < 4);
+            const bool twinPair = (g2 - g1 == 4);
+            BOOST_CHECK(sameHalf || twinPair);
+        }
     }
 }
 
