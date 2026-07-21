@@ -126,6 +126,71 @@ constexpr Value gasFraction(const Value& sg,
     return clampFraction(Value((sg - offset - ep.sgco) / denom));
 }
 
+/*!
+ * The gravity-drainage head terms couple the mobile fractions of the two
+ * continua into the twin-connection potential.  The gas-oil and water-oil
+ * heads are formed from the fraction difference between the two cells and
+ * shared half-and-half between the phases of each pair.  Argument order is
+ * the caller's orientation: the head is positive when cell `a` holds the
+ * larger mobile fraction.
+ */
+
+template <class Value>
+constexpr Value gasOilGravityHead(const double gravity,
+                                  const double dzMatrix,
+                                  const Value& rhoOil,
+                                  const Value& rhoGas,
+                                  const Value& xgA,
+                                  const Value& xgB) noexcept
+{
+    return gravity * dzMatrix * (rhoOil - rhoGas) * (xgA - xgB);
+}
+
+template <class Value>
+constexpr Value waterOilGravityHead(const double gravity,
+                                    const double dzMatrix,
+                                    const Value& rhoWater,
+                                    const Value& rhoOil,
+                                    const Value& xwA,
+                                    const Value& xwB) noexcept
+{
+    return gravity * dzMatrix * (rhoWater - rhoOil) * (xwA - xwB);
+}
+
+//! Per-phase share of the gravity-drainage heads.
+template <class Value>
+struct PhaseGravityHeads
+{
+    Value oil;
+    Value gas;
+    Value water;
+};
+
+//! Split the two pair heads onto the three phases: each pair head is shared
+//! half-and-half, and the oil phase balances both pairs.
+template <class Value>
+constexpr PhaseGravityHeads<Value> phaseGravityHeads(const Value& gasOilHead,
+                                                     const Value& waterOilHead) noexcept
+{
+    return { -0.5 * (gasOilHead + waterOilHead),
+             0.5 * gasOilHead,
+             0.5 * waterOilHead };
+}
+
+//! The gravity-drainage sigma transmissibility replaces the standard one for
+//! the OIL phase only when the model is active, the oil flows from the matrix
+//! into the fracture, and the gas-side head dominates the water-side head.
+template <class Value>
+constexpr bool useGravityDrainageSigmaForOil(const bool gravityDrainageActive,
+                                             const bool oilFlowsMatrixToFracture,
+                                             const Value& gasOilHead,
+                                             const Value& waterOilHead) noexcept
+{
+    return gravityDrainageActive
+        && oilFlowsMatrixToFracture
+        && (gasOilHead > waterOilHead);
+}
+
 } // namespace Opm::DualPorosityFractions
 
 #endif // OPM_DUAL_POROSITY_GRAVITY_DRAINAGE_FRACTIONS_HPP

@@ -49,6 +49,7 @@
 #include <opm/input/eclipse/Units/Units.hpp>
 
 #include <opm/simulators/flow/ActionHandler.hpp>
+#include <opm/simulators/flow/DualPorosityGravityDrainageFractions.hpp>
 #include <opm/simulators/flow/FlowProblem.hpp>
 #include <opm/simulators/flow/FlowProblemBlackoilProperties.hpp>
 #include <opm/simulators/flow/FlowThresholdPressure.hpp>
@@ -159,7 +160,8 @@ private:
     using IndexTraits = typename FluidSystem::IndexTraitsType;
     using InitialFluidState = typename EquilInitializer<TypeTag>::ScalarFluidState;
     using HybridNewton = BlackOilHybridNewton<TypeTag>;
-    using ModuleParams = BlackoilModuleParams<ConvectiveMixingModuleParam<Scalar>>;
+    using ModuleParams = BlackoilModuleParams<ConvectiveMixingModuleParam<Scalar>,
+                                              DualPorosityGravityDrainageParam<Scalar>>;
 
 #if HAVE_DAMARIS
     using DamarisWriterType = DamarisWriter<TypeTag>;
@@ -448,6 +450,8 @@ public:
         }
 
         this->readBoundaryConditions_();
+
+        this->updateDualPorosityGravityDrainageParams_();
 
         // compute and set eq weights based on initial b values
         this->computeAndSetEqWeights_();
@@ -1196,6 +1200,58 @@ public:
     const ModuleParams& moduleParams() const
     {
         return moduleParams_;
+    }
+
+    //! Fill the per-cell static data of the dual-porosity gravity-drainage
+    //! flux terms.  No-op unless a gravity-drainage model is requested.
+    void updateDualPorosityGravityDrainageParams_()
+    {
+        const auto& eclState = this->simulator().vanguard().eclState();
+        if (!eclState.runspec().gravityDrainage()) {
+            return;
+        }
+
+        const auto& fp = eclState.fieldProps();
+        std::vector<double> dzMatrix;
+        if (fp.has_double("DZMTRXV")) {
+            dzMatrix = this->lookUpData_.assignFieldPropsDoubleOnLeaf(fp, "DZMTRXV");
+        }
+
+        auto& gdParam = moduleParams_.dualPorosityGravityDrainageParam;
+        const auto& materialMgr = *this->materialLawManager();
+        const std::size_t numDof = this->model().numGridDof();
+        gdParam.active = true;
+        gdParam.gravity = this->gravity()[dimWorld - 1];
+        gdParam.cell.resize(numDof);
+        for (std::size_t dofIdx = 0; dofIdx < numDof; ++dofIdx) {
+            const auto& eps = materialMgr.oilWaterScaledEpsInfoDrainage(dofIdx);
+            auto& cd = gdParam.cell[dofIdx];
+            // Mobile-fraction end points from the scaled saturation table end
+            // points: the connate hydrocarbon/liquid saturations follow from
+            // the maximum-saturation identities, the critical ones sum the
+            // residuals of both displaced phases.
+            cd.swco = eps.Swl;
+            cd.swcr = eps.Swcr;
+            cd.scohy = DualPorosityFractions::clampFraction(1.0 - eps.Swu);
+            cd.scrhy = DualPorosityFractions::clampFraction(eps.Sowcr + eps.Sgcr);
+            cd.sgco = eps.Sgl;
+            cd.sgcr = eps.Sgcr;
+            cd.slco = DualPorosityFractions::clampFraction(1.0 - eps.Sgu);
+            cd.slcr = DualPorosityFractions::clampFraction(eps.Sogcr + eps.Swcr);
+
+            const auto& initialFs = this->initialFluidState(dofIdx);
+            if (FluidSystem::phaseIsActive(waterPhaseIdx)) {
+                cd.swi = initialFs.saturation(waterPhaseIdx);
+            }
+            if (FluidSystem::phaseIsActive(gasPhaseIdx)) {
+                cd.sgi = initialFs.saturation(gasPhaseIdx);
+            }
+            cd.xwi = DualPorosityFractions::initialWaterFraction(
+                cd.swi, {cd.swco, cd.swcr, cd.scohy, cd.scrhy});
+            cd.xgi = DualPorosityFractions::initialGasFraction(
+                cd.sgi, {cd.sgco, cd.sgcr, cd.slco, cd.slcr});
+            cd.dzMatrix = dzMatrix.empty() ? 0.0 : dzMatrix[dofIdx];
+        }
     }
 
     template<class Serializer>

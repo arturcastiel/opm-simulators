@@ -40,6 +40,7 @@
 #include <map>
 #include <cstdint>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Opm {
@@ -93,6 +94,26 @@ public:
      * pair or the run defines no gravity-drainage sigma.
      */
     Scalar dualPorosityGravityDrainageTrans(unsigned elemIdx1, unsigned elemIdx2) const;
+
+    /*!
+     * \brief Per-connection description of a dual-porosity twin pair for the
+     *        gravity-drainage flux terms.
+     *
+     * Inert (all members zero/false) unless a gravity-drainage model is
+     * active and the two elements form a matrix/fracture twin pair.  The
+     * pair is registered independently of SIGMAGD (whose transmissibility
+     * is optional) and of DZMTRX (whose absence keeps the documented
+     * zero-effect default).
+     */
+    struct GravityDrainagePairInfo
+    {
+        bool isTwinPair = false;
+        bool firstIsMatrix = false;
+        Scalar trGd = 0.0;
+        Scalar dzMatrix = 0.0;
+    };
+
+    GravityDrainagePairInfo dualPorosityGravityDrainagePair(unsigned elemIdx1, unsigned elemIdx2) const;
 
     /*!
      * \brief Return the thermal "half transmissibility" for the intersection between two
@@ -267,6 +288,8 @@ protected:
 
     void computeDualPorosityGravityDrainageTrans_(const std::unordered_map<std::size_t,int>& globalToLocal);
 
+    void computeDualPorosityGravityDrainagePairs_(const std::unordered_map<std::size_t,int>& globalToLocal);
+
     void extractPorosity_();
 
     void extractDispersion_();
@@ -297,6 +320,7 @@ protected:
     std::vector<Scalar> dispersion_;
     std::unordered_map<std::uint64_t, Scalar> trans_;
     std::unordered_map<std::uint64_t, Scalar> dpGravDrainageTrans_;
+    std::unordered_map<std::uint64_t, std::pair<unsigned, Scalar>> dpGravDrainagePairs_;
     const EclipseState& eclState_;
     const GridView& gridView_;
     const CartesianIndexMapper& cartMapper_;

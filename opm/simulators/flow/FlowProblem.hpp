@@ -569,6 +569,15 @@ public:
     }
 
     /*!
+     * \brief Twin-pair information of a connection for the dual-porosity
+     *        gravity-drainage flux terms.
+     */
+    auto dualPorosityGravityDrainagePair(unsigned elemIdx1, unsigned elemIdx2) const
+    {
+        return transmissibilities_.dualPorosityGravityDrainagePair(elemIdx1, elemIdx2);
+    }
+
+    /*!
      * \copydoc EclTransmissiblity::diffusivity
      */
     template <class Context>

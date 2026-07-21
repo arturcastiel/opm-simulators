@@ -140,7 +140,8 @@ class NewTranExtensiveQuantities
     using DimMatrix = Dune::FieldMatrix<Scalar, dimWorld, dimWorld>;
 
     using ConvectiveMixingModule = BlackOilConvectiveMixingModule<TypeTag, enableConvectiveMixing>;
-    using ModuleParams = BlackoilModuleParams<ConvectiveMixingModuleParam<Scalar>>;
+    using ModuleParams = BlackoilModuleParams<ConvectiveMixingModuleParam<Scalar>,
+                                              DualPorosityGravityDrainageParam<Scalar>>;
 
 public:
     /*!
@@ -343,6 +344,31 @@ public:
                                                             const Scalar thpresExToIn,
                                                             const ModuleParamsT& moduleParams)
     {
+        calculatePhasePressureDiff_(upIdx, dnIdx, pressureDifference, intQuantsIn, intQuantsEx,
+                                    phaseIdx, interiorDofIdx, exteriorDofIdx, Vin, Vex,
+                                    globalIndexIn, globalIndexEx, distZg, thpresInToEx, thpresExToIn,
+                                    moduleParams, EvalType(0.0));
+    }
+
+    template<class EvalType, class ModuleParamsT = ModuleParams>
+    OPM_HOST_DEVICE static void calculatePhasePressureDiff_(short& upIdx,
+                                                            short& dnIdx,
+                                                            EvalType& pressureDifference,
+                                                            const IntensiveQuantities& intQuantsIn,
+                                                            const IntensiveQuantities& intQuantsEx,
+                                                            const unsigned phaseIdx,
+                                                            const unsigned interiorDofIdx,
+                                                            const unsigned exteriorDofIdx,
+                                                            const Scalar Vin,
+                                                            const Scalar Vex,
+                                                            const unsigned globalIndexIn,
+                                                            const unsigned globalIndexEx,
+                                                            const Scalar distZg,
+                                                            const Scalar thpresInToEx,
+                                                            const Scalar thpresExToIn,
+                                                            const ModuleParamsT& moduleParams,
+                                                            const EvalType& extraHead)
+    {
 
         // check shortcut: if the mobility of the phase is zero in the interior as
         // well as the exterior DOF, we can skip looking at the phase.
@@ -369,9 +395,9 @@ public:
         Evaluation pressureExterior = Toolbox::value(intQuantsEx.fluidState().pressure(phaseIdx));
         if (enableExtbo) // added stability; particulary useful for solvent migrating in pure water
                          // where the solvent fraction displays a 0/1 behaviour ...
-            pressureExterior += Toolbox::value(rhoAvg)*(distZg);
+            pressureExterior += Toolbox::value(rhoAvg)*(distZg) + Toolbox::value(extraHead);
         else
-            pressureExterior += rhoAvg*(distZg);
+            pressureExterior += rhoAvg*(distZg) + extraHead;
 
         pressureDifference = pressureExterior - pressureInterior;
 

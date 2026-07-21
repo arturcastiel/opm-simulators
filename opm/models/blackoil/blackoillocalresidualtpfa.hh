@@ -42,6 +42,8 @@
 
 #include <opm/models/discretization/common/fvbaseproperties.hh>
 
+#include <opm/simulators/flow/DualPorosityGravityDrainageFractions.hpp>
+
 #include <opm/common/ErrorMacros.hpp>
 #include <opm/common/utility/gpuDecorators.hpp>
 #include <opm/common/utility/gpuistl_if_available.hpp>
@@ -131,7 +133,8 @@ class BlackOilLocalResidualTPFA : public GetPropType<TypeTag, Properties::DiscLo
     using SolventModule = BlackOilSolventModule<TypeTag, enableSolvent>;
     using PolymerModule = BlackOilPolymerModule<TypeTag, enablePolymer>;
 
-    using ModuleParams = BlackoilModuleParams<ConvectiveMixingModuleParam<Scalar>>;
+    using ModuleParams = BlackoilModuleParams<ConvectiveMixingModuleParam<Scalar>,
+                                              DualPorosityGravityDrainageParam<Scalar>>;
     using Toolbox = MathToolbox<Evaluation>;
 
 public:
@@ -148,6 +151,11 @@ public:
         ConditionalStorage<enableFullyImplicitThermal, double> outAlpha;
         ConditionalStorage<enableDiffusion, double> diffusivity;
         ConditionalStorage<enableDispersion, double> dispersivity;
+        // dual-porosity gravity drainage: inert unless the connection is a
+        // twin pair of a run with an active gravity-drainage model
+        double gdTrans = 0.0;
+        bool gdTwinPair = false;
+        bool gdInIsMatrix = false;
     };
 
     /*!
@@ -392,6 +400,61 @@ public:
 
         const FluidSystem& fsys = intQuantsIn.getFluidSystem();
 
+        // dual-porosity gravity drainage: pseudo-heads of a twin connection,
+        // shared per phase; zero on every other connection.  Host-only --
+        // dual-porosity runs are serial.
+        const Evaluation gdZeroHead(0.0);
+        Evaluation gdGasOilHead(0.0);
+        Evaluation gdWaterOilHead(0.0);
+        DualPorosityFractions::PhaseGravityHeads<Evaluation> gdHeads{
+            Evaluation(0.0), Evaluation(0.0), Evaluation(0.0)};
+        bool gdActive = false;
+#if !OPM_IS_INSIDE_DEVICE_FUNCTION
+        const auto& gdParam = moduleParams.dualPorosityGravityDrainageParam;
+        gdActive = nbInfo.gdTwinPair && gdParam.active && !gdParam.cell.empty();
+        if (gdActive) {
+            using namespace DualPorosityFractions;
+            const auto& cdIn = gdParam.cell[globalIndexIn];
+            const auto& cdEx = gdParam.cell[globalIndexEx];
+            const auto& cdMatrix = nbInfo.gdInIsMatrix ? cdIn : cdEx;
+            const auto& fsIn = intQuantsIn.fluidState();
+            const auto& fsEx = intQuantsEx.fluidState();
+
+            const bool oilActive = fsys.phaseIsActive(oilPhaseIdx);
+            const Evaluation rhoOil = oilActive
+                ? (fsIn.density(oilPhaseIdx) + Toolbox::value(fsEx.density(oilPhaseIdx))) / 2
+                : Evaluation(0.0);
+
+            if (oilActive && fsys.phaseIsActive(waterPhaseIdx)) {
+                const WaterFractionEndPoints epIn{cdIn.swco, cdIn.swcr, cdIn.scohy, cdIn.scrhy};
+                const WaterFractionEndPoints epEx{cdEx.swco, cdEx.swcr, cdEx.scohy, cdEx.scrhy};
+                const Evaluation xwIn =
+                    waterFraction(Evaluation(fsIn.saturation(waterPhaseIdx)), cdIn.swi, cdIn.xwi, epIn);
+                const Evaluation xwEx =
+                    waterFraction(Evaluation(Toolbox::value(fsEx.saturation(waterPhaseIdx))),
+                                  cdEx.swi, cdEx.xwi, epEx);
+                const Evaluation rhoWater =
+                    (fsIn.density(waterPhaseIdx) + Toolbox::value(fsEx.density(waterPhaseIdx))) / 2;
+                gdWaterOilHead = waterOilGravityHead(gdParam.gravity, cdMatrix.dzMatrix,
+                                                     rhoWater, rhoOil, xwEx, xwIn);
+            }
+            if (oilActive && fsys.phaseIsActive(gasPhaseIdx)) {
+                const GasFractionEndPoints epIn{cdIn.sgco, cdIn.sgcr, cdIn.slco, cdIn.slcr};
+                const GasFractionEndPoints epEx{cdEx.sgco, cdEx.sgcr, cdEx.slco, cdEx.slcr};
+                const Evaluation xgIn =
+                    gasFraction(Evaluation(fsIn.saturation(gasPhaseIdx)), cdIn.sgi, cdIn.xgi, epIn);
+                const Evaluation xgEx =
+                    gasFraction(Evaluation(Toolbox::value(fsEx.saturation(gasPhaseIdx))),
+                                cdEx.sgi, cdEx.xgi, epEx);
+                const Evaluation rhoGas =
+                    (fsIn.density(gasPhaseIdx) + Toolbox::value(fsEx.density(gasPhaseIdx))) / 2;
+                gdGasOilHead = gasOilGravityHead(gdParam.gravity, cdMatrix.dzMatrix,
+                                                 rhoOil, rhoGas, xgEx, xgIn);
+            }
+            gdHeads = phaseGravityHeads(gdGasOilHead, gdWaterOilHead);
+        }
+#endif // !OPM_IS_INSIDE_DEVICE_FUNCTION
+
         for (unsigned phaseIdx = 0; phaseIdx < numPhases; ++phaseIdx) {
             if (!fsys.phaseIsActive(phaseIdx)) {
                 continue;
@@ -419,10 +482,30 @@ public:
                                                              distZg,
                                                              thpresInToEx,
                                                              thpresExToIn,
-                                                             moduleParams);
+                                                             moduleParams,
+                                                             !gdActive ? gdZeroHead
+                                                             : phaseIdx == oilPhaseIdx ? gdHeads.oil
+                                                             : phaseIdx == gasPhaseIdx ? gdHeads.gas
+                                                             : gdHeads.water);
 
             const IntensiveQuantities& up = (upIdx == interiorDofIdx) ? intQuantsIn : intQuantsEx;
             unsigned globalUpIndex = (upIdx == interiorDofIdx) ? globalIndexIn : globalIndexEx;
+
+            // dual-porosity gravity drainage: oil leaving the matrix switches
+            // to the gravity-drainage sigma transmissibility when the
+            // gas-side head dominates the water-side head.
+            Scalar phaseTrans = trans;
+#if !OPM_IS_INSIDE_DEVICE_FUNCTION
+            if (gdActive && phaseIdx == oilPhaseIdx && nbInfo.gdTrans > 0.0) {
+                const bool oilMatrixToFracture = nbInfo.gdInIsMatrix
+                    ? (upIdx == interiorDofIdx)
+                    : (upIdx == exteriorDofIdx);
+                if (DualPorosityFractions::useGravityDrainageSigmaForOil(
+                        true, oilMatrixToFracture, gdGasOilHead, gdWaterOilHead)) {
+                    phaseTrans = nbInfo.gdTrans;
+                }
+            }
+#endif // !OPM_IS_INSIDE_DEVICE_FUNCTION
             // Use arithmetic average (more accurate with harmonic, but that requires recomputing
             // the transmissbility)
             Evaluation transMult = (intQuantsIn.rockCompTransMultiplier()
@@ -436,11 +519,11 @@ public:
             Evaluation darcyFlux;
             if (globalUpIndex == globalIndexIn) {
                 darcyFlux = pressureDifference * up.mobility(phaseIdx, facedir) * transMult
-                    * (-trans / faceArea);
+                    * (-phaseTrans / faceArea);
             } else {
                 darcyFlux = pressureDifference
                     * (Toolbox::value(up.mobility(phaseIdx, facedir)) * transMult
-                       * (-trans / faceArea));
+                       * (-phaseTrans / faceArea));
             }
 
             unsigned activeCompIdx

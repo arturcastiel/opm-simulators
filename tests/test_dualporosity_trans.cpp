@@ -28,6 +28,8 @@
 #include <opm/input/eclipse/Parser/Parser.hpp>
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
 
+#include <opm/material/densead/Evaluation.hpp>
+
 #include <dune/grid/common/mcmgmapper.hh>
 
 #include <opm/grid/CpGrid.hpp>
@@ -69,7 +71,7 @@ public:
     auto getTransmissibilitymap() { return this->trans_; }
 };
 
-Deck dualContinuumDeck(bool nodppm, bool dualperm, bool gravdr = false)
+Deck dualContinuumDeck(bool nodppm, bool dualperm, bool gravdr = false, bool dzmtrx = false)
 {
     // 2x1x4: matrix cells cart 0-3 (k=0,1), fracture cells cart 4-7 (k=2,3),
     // co-located twins, sigma one field value.
@@ -99,7 +101,8 @@ PERMZ
  4*0.5 4*500.0 /
 SIGMA
  0.12 /
-)" + (gravdr ? std::string{"SIGMAGD\n 0.05 /\n"} : std::string{}) + "END";
+)" + (gravdr ? std::string{"SIGMAGD\n 0.05 /\n"} : std::string{})
+    + (dzmtrx ? std::string{"DZMTRX\n 8. /\n"} : std::string{}) + "END";
     return Parser{}.parseString(deckData);
 }
 
@@ -137,9 +140,19 @@ END)";
     return Parser{}.parseString(deckData);
 }
 
+struct PairProbe {
+    bool isTwinPair = false;
+    bool firstIsMatrix = false;
+    double trGd = 0.0;
+    double dzMatrix = 0.0;
+};
+
 struct TransResult {
     std::map<std::size_t, double> byId;
     std::array<double, 4> gdTwin{};
+    std::array<PairProbe, 4> pairMatrixFirst{};
+    std::array<PairProbe, 4> pairFractureFirst{};
+    PairProbe nonPair{};
     double trans(std::size_t c1, std::size_t c2) const {
         auto it = byId.find(details::isId(c1, c2));
         return it == byId.end() ? 0.0 : it->second;
@@ -173,12 +186,22 @@ TransResult computeTransFromDeck(const Deck& deck)
     for (std::size_t g = 0; g < result.gdTwin.size(); ++g) {
         result.gdTwin[g] = eclTransmissibility.dualPorosityGravityDrainageTrans(g, g + 4);
     }
+    auto probe = [&](unsigned e1, unsigned e2) {
+        const auto info = eclTransmissibility.dualPorosityGravityDrainagePair(e1, e2);
+        return PairProbe{info.isTwinPair, info.firstIsMatrix, info.trGd, info.dzMatrix};
+    };
+    for (unsigned g = 0; g < 4; ++g) {
+        result.pairMatrixFirst[g] = probe(g, g + 4);
+        result.pairFractureFirst[g] = probe(g + 4, g);
+    }
+    result.nonPair = probe(0, 1);
     return result;
 }
 
-TransResult computeTrans(bool nodppm, bool dualperm = false, bool gravdr = false)
+TransResult computeTrans(bool nodppm, bool dualperm = false, bool gravdr = false,
+                         bool dzmtrx = false)
 {
-    return computeTransFromDeck(dualContinuumDeck(nodppm, dualperm, gravdr));
+    return computeTransFromDeck(dualContinuumDeck(nodppm, dualperm, gravdr, dzmtrx));
 }
 
 // The coupling transmissibility of every twin pair:
@@ -299,6 +322,48 @@ BOOST_AUTO_TEST_CASE(GravityDrainageCouplingTransAbsent)
     }
 }
 
+BOOST_AUTO_TEST_CASE(GravityDrainagePairRegistry)
+{
+    // GRAVDR + SIGMAGD + DZMTRX: every twin pair reports identity,
+    // orientation, the second transmissibility and the matrix block height.
+    const auto res = computeTrans(/*nodppm=*/true, /*dualperm=*/false,
+                                  /*gravdr=*/true, /*dzmtrx=*/true);
+    const double expectedGd = 9.869232667160130e-16 * 0.5 * 1.0e5 * 0.05;
+    for (std::size_t g = 0; g < 4; ++g) {
+        BOOST_CHECK(res.pairMatrixFirst[g].isTwinPair);
+        BOOST_CHECK(res.pairMatrixFirst[g].firstIsMatrix);
+        BOOST_CHECK(res.pairFractureFirst[g].isTwinPair);
+        BOOST_CHECK(!res.pairFractureFirst[g].firstIsMatrix);
+        BOOST_CHECK_CLOSE(res.pairMatrixFirst[g].trGd, expectedGd, 1e-4);
+        BOOST_CHECK_CLOSE(res.pairMatrixFirst[g].dzMatrix, 8.0, 1e-10);
+        BOOST_CHECK_CLOSE(res.pairFractureFirst[g].dzMatrix, 8.0, 1e-10);
+    }
+
+    // Neighbours within one half are not a pair.
+    BOOST_CHECK(!res.nonPair.isTwinPair);
+    BOOST_CHECK_EQUAL(res.nonPair.trGd, 0.0);
+    BOOST_CHECK_EQUAL(res.nonPair.dzMatrix, 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(GravityDrainagePairDefaults)
+{
+    // The pair is registered by the gravity-drainage request alone: without
+    // DZMTRX the block height keeps its zero-effect default, and the sigma
+    // transmissibility stays whatever SIGMAGD provides.
+    const auto withGd = computeTrans(/*nodppm=*/true, /*dualperm=*/false, /*gravdr=*/true);
+    for (std::size_t g = 0; g < 4; ++g) {
+        BOOST_CHECK(withGd.pairMatrixFirst[g].isTwinPair);
+        BOOST_CHECK_EQUAL(withGd.pairMatrixFirst[g].dzMatrix, 0.0);
+    }
+
+    // Without a gravity-drainage request the registry is inert.
+    const auto noGd = computeTrans(/*nodppm=*/true);
+    for (std::size_t g = 0; g < 4; ++g) {
+        BOOST_CHECK(!noGd.pairMatrixFirst[g].isTwinPair);
+        BOOST_CHECK(!noGd.pairFractureFirst[g].isTwinPair);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(MobileFractionFormulas)
 {
     using namespace Opm::DualPorosityFractions;
@@ -323,6 +388,64 @@ BOOST_AUTO_TEST_CASE(MobileFractionFormulas)
     BOOST_CHECK_CLOSE(gasFraction(sgi, sgi, xgi, gep), xgi, 1e-10);
     BOOST_CHECK_CLOSE(gasFraction(0.30, sgi, xgi, gep),
                       (0.30 - xgi * 0.10 - 0.02) / 0.58, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(GravityDrainageHeadFormulas)
+{
+    using namespace Opm::DualPorosityFractions;
+
+    // Hand values: g = 9.81, block height 10 m, rho_o = 800, rho_g = 100,
+    // rho_w = 1000 kg/m3.
+    const double og = gasOilGravityHead(9.81, 10.0, 800.0, 100.0, 1.0, 0.0);
+    BOOST_CHECK_CLOSE(og, 9.81 * 10.0 * 700.0, 1e-10);
+
+    // The head follows the sign of the fraction difference.
+    const double ow = waterOilGravityHead(9.81, 10.0, 1000.0, 800.0, 0.25, 0.75);
+    BOOST_CHECK_CLOSE(ow, -9.81 * 10.0 * 200.0 * 0.5, 1e-10);
+
+    // Equal fractions carry no head.
+    BOOST_CHECK_EQUAL(gasOilGravityHead(9.81, 10.0, 800.0, 100.0, 0.4, 0.4), 0.0);
+
+    // Phase split: each pair head is shared half-and-half; oil balances both.
+    const auto heads = phaseGravityHeads(og, ow);
+    BOOST_CHECK_CLOSE(heads.oil, -0.5 * (og + ow), 1e-12);
+    BOOST_CHECK_CLOSE(heads.gas, 0.5 * og, 1e-12);
+    BOOST_CHECK_CLOSE(heads.water, 0.5 * ow, 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(GravityDrainageOilSigmaSwitch)
+{
+    using namespace Opm::DualPorosityFractions;
+
+    const double og = 500.0;
+    const double ow = 200.0;
+    BOOST_CHECK(useGravityDrainageSigmaForOil(true, true, og, ow));
+    // Model inactive.
+    BOOST_CHECK(!useGravityDrainageSigmaForOil(false, true, og, ow));
+    // Oil flowing fracture -> matrix.
+    BOOST_CHECK(!useGravityDrainageSigmaForOil(true, false, og, ow));
+    // Water-side head dominates.
+    BOOST_CHECK(!useGravityDrainageSigmaForOil(true, true, ow, og));
+}
+
+BOOST_AUTO_TEST_CASE(GravityDrainageHeadsCarryDerivatives)
+{
+    using namespace Opm::DualPorosityFractions;
+    using Eval = DenseAd::Evaluation<double, 1>;
+
+    // A saturation-driven fraction with a unit derivative must carry that
+    // derivative through the head and the phase split.
+    const Eval xg = Eval::createVariable(0.6, 0);
+    const Eval og = gasOilGravityHead(9.81, 10.0, Eval(800.0), Eval(100.0), xg, Eval(0.1));
+    BOOST_CHECK_CLOSE(og.value(), 9.81 * 10.0 * 700.0 * 0.5, 1e-10);
+    BOOST_CHECK_CLOSE(og.derivative(0), 9.81 * 10.0 * 700.0, 1e-10);
+
+    const Eval ow = waterOilGravityHead(9.81, 10.0, Eval(1000.0), Eval(800.0),
+                                        Eval(0.2), Eval(0.2));
+    const auto heads = phaseGravityHeads(og, ow);
+    BOOST_CHECK_CLOSE(heads.gas.derivative(0), 0.5 * 9.81 * 10.0 * 700.0, 1e-10);
+    BOOST_CHECK_CLOSE(heads.oil.derivative(0), -0.5 * 9.81 * 10.0 * 700.0, 1e-10);
+    BOOST_CHECK_EQUAL(heads.water.value(), 0.0);
 }
 
 int main(int argc, char** argv)

@@ -562,6 +562,12 @@ private:
                         if constexpr (enableDispersion) {
                             nbinfo.dispersivity = problem_().dispersivity(myIdx, neighborIdx);
                         }
+                        if constexpr (requires { problem_().dualPorosityGravityDrainagePair(myIdx, neighborIdx); }) {
+                            const auto gdPair = problem_().dualPorosityGravityDrainagePair(myIdx, neighborIdx);
+                            nbinfo.gdTrans = gdPair.trGd;
+                            nbinfo.gdTwinPair = gdPair.isTwinPair;
+                            nbinfo.gdInIsMatrix = gdPair.firstIsMatrix;
+                        }
                         loc_nbinfo[dofIdx - 1] = NeighborInfoCPU{neighborIdx, nbinfo, nullptr};
                     }
                 }

@@ -16,11 +16,15 @@
 #ifndef OPM_MODELS_BLACKOIL_MODULEPARAM_HH
 #define OPM_MODELS_BLACKOIL_MODULEPARAM_HH
 
+#include <opm/models/blackoil/blackoildualporositygravitydrainageparam.hpp>
+
 namespace Opm {
-    template<class ConvectiveMixingModuleParamT>
+    template<class ConvectiveMixingModuleParamT,
+             class DualPorosityGravityDrainageParamT = DualPorosityGravityDrainageParam<double>>
     struct BlackoilModuleParams
     {
         ConvectiveMixingModuleParamT convectiveMixingModuleParam;
+        DualPorosityGravityDrainageParamT dualPorosityGravityDrainageParam;
     };
 } // namespace Opm
 

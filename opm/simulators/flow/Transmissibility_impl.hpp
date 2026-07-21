@@ -610,6 +610,7 @@ update(bool global, const TransUpdateQuantities update_quantities,
     }
 
     this->computeDualPorosityGravityDrainageTrans_(globalToLocal);
+    this->computeDualPorosityGravityDrainagePairs_(globalToLocal);
 
     // If disableNNC == true, remove all non-neighbouring transmissibilities.
     // If disableNNC == false, remove very small non-neighbouring transmissibilities.
@@ -666,6 +667,64 @@ computeDualPorosityGravityDrainageTrans_(const std::unordered_map<std::size_t,in
             this->dpGravDrainageTrans_.emplace(
                 details::isId(matrixElem, static_cast<unsigned>(elemIdx)), trans);
         }
+    }
+}
+
+template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>
+typename Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::GravityDrainagePairInfo
+Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::
+dualPorosityGravityDrainagePair(unsigned elemIdx1, unsigned elemIdx2) const
+{
+    GravityDrainagePairInfo info{};
+    const auto it = dpGravDrainagePairs_.find(details::isId(elemIdx1, elemIdx2));
+    if (it == dpGravDrainagePairs_.end()) {
+        return info;
+    }
+    info.isTwinPair = true;
+    info.firstIsMatrix = (it->second.first == elemIdx1);
+    info.trGd = this->dualPorosityGravityDrainageTrans(elemIdx1, elemIdx2);
+    info.dzMatrix = it->second.second;
+    return info;
+}
+
+template<class Grid, class GridView, class ElementMapper, class CartesianIndexMapper, class Scalar>
+void Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::
+computeDualPorosityGravityDrainagePairs_(const std::unordered_map<std::size_t,int>& globalToLocal)
+{
+    // Twin-pair registry for the gravity-drainage flux terms.  Populated for
+    // every active twin pair once a gravity-drainage model is requested --
+    // independently of the optional gravity-drainage sigma and of the matrix
+    // block height, whose absence keeps the documented zero-effect default.
+    this->dpGravDrainagePairs_.clear();
+
+    const auto& rspec = eclState_.runspec();
+    if (!rspec.gravityDrainage()) {
+        return;
+    }
+
+    const auto& fp = eclState_.fieldProps();
+    const auto& inputGrid = eclState_.getInputGrid();
+    std::vector<double> dzMatrix;
+    if (fp.has_double("DZMTRXV")) {
+        dzMatrix = this->lookUpData_.assignFieldPropsDoubleOnLeaf(fp, "DZMTRXV");
+    }
+
+    for (const auto& [cartIdx, elemIdx] : globalToLocal) {
+        if (!inputGrid.isFractureCell(cartIdx)) {
+            continue;
+        }
+
+        const auto matrixCart = inputGrid.matrixTwin(cartIdx);
+        const auto matrixPos = globalToLocal.find(matrixCart);
+        if (matrixPos == globalToLocal.end()) {
+            continue;
+        }
+
+        const auto matrixElem = static_cast<unsigned>(matrixPos->second);
+        const Scalar dz = dzMatrix.empty() ? 0.0 : dzMatrix[matrixElem];
+        this->dpGravDrainagePairs_.emplace(
+            details::isId(matrixElem, static_cast<unsigned>(elemIdx)),
+            std::make_pair(matrixElem, dz));
     }
 }
 
