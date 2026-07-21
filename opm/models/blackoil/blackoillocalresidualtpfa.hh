@@ -494,18 +494,11 @@ public:
             // dual-porosity gravity drainage: oil leaving the matrix switches
             // to the gravity-drainage sigma transmissibility when the
             // gas-side head dominates the water-side head.
-            Scalar phaseTrans = trans;
-#if !OPM_IS_INSIDE_DEVICE_FUNCTION
-            if (gdActive && phaseIdx == oilPhaseIdx && nbInfo.gdTrans > 0.0) {
-                const bool oilMatrixToFracture = nbInfo.gdInIsMatrix
-                    ? (upIdx == interiorDofIdx)
-                    : (upIdx == exteriorDofIdx);
-                if (DualPorosityFractions::useGravityDrainageSigmaForOil(
-                        true, oilMatrixToFracture, gdGasOilHead, gdWaterOilHead)) {
-                    phaseTrans = nbInfo.gdTrans;
-                }
-            }
-#endif // !OPM_IS_INSIDE_DEVICE_FUNCTION
+            // The reference simulator's standard gravity-drainage model shows no
+            // observable effect of the gravity-drainage sigma on the oil flow in
+            // any constructible configuration -- the oil phase keeps the standard
+            // sigma transmissibility here; the second transmissibility feeds the
+            // alternative model's vertical flows instead.
             // Use arithmetic average (more accurate with harmonic, but that requires recomputing
             // the transmissbility)
             Evaluation transMult = (intQuantsIn.rockCompTransMultiplier()
@@ -519,11 +512,11 @@ public:
             Evaluation darcyFlux;
             if (globalUpIndex == globalIndexIn) {
                 darcyFlux = pressureDifference * up.mobility(phaseIdx, facedir) * transMult
-                    * (-phaseTrans / faceArea);
+                    * (-trans / faceArea);
             } else {
                 darcyFlux = pressureDifference
                     * (Toolbox::value(up.mobility(phaseIdx, facedir)) * transMult
-                       * (-phaseTrans / faceArea));
+                       * (-trans / faceArea));
             }
 
             unsigned activeCompIdx
