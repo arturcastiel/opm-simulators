@@ -38,6 +38,7 @@
 #include <opm/grid/utility/ElementChunks.hpp>
 
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
+#include <opm/input/eclipse/EclipseState/Grid/EclipseGrid.hpp>
 #include <opm/input/eclipse/EclipseState/Grid/FaceDir.hpp>
 #include <opm/input/eclipse/EclipseState/Grid/FieldPropsManager.hpp>
 #include <opm/input/eclipse/EclipseState/Grid/TransMult.hpp>
@@ -185,8 +186,7 @@ update(bool global, const TransUpdateQuantities update_quantities,
     // Twin classification is arithmetic on the global Cartesian index: the fracture half is
     // the upper half of the index range.  Deriving it from the Cartesian dimensions keeps this
     // rank-local -- EclipseState::getInputGrid() is available on the I/O rank only.
-    const std::size_t matrixCellCount =
-        (static_cast<std::size_t>(cartDims[0]) * cartDims[1] * cartDims[2]) / 2;
+    const std::size_t matrixCellCount = EclipseGrid::matrixCellCount(cartDims);
     const auto isFractureCell = [matrixCellCount](const std::size_t cartIdx)
     {
         return cartIdx >= matrixCellCount;
@@ -794,14 +794,20 @@ applyDualPorosityPermScaling_(const std::function<unsigned int(unsigned int)>& m
 
     const auto& fp = eclState_.fieldProps();
     const std::vector<double>& poroData = this->lookUpData_.assignFieldPropsDoubleOnLeaf(fp, "PORO");
-    const auto& inputGrid = eclState_.getInputGrid();
+
+    // Classify twins from the Cartesian dimensions rather than from the input grid:
+    // the same arithmetic EclipseGrid uses, but available on every process. This file
+    // asked the question two different ways -- the face policy already derives it
+    // locally -- and the input-grid form is the pattern that broke every parallel run.
+    const std::size_t matrixCellCount =
+        EclipseGrid::matrixCellCount(cartMapper_.cartesianDimensions());
 
     // The porosity must be read through the same element-to-input mapping
     // the permeability extraction used, so reordered grids scale the right
     // cells.
     for (std::size_t elemIdx = 0; elemIdx < permeability_.size(); ++elemIdx) {
         const auto inputDofIdx = map(static_cast<unsigned int>(elemIdx));
-        if (inputGrid.isFractureCell(cartMapper_.cartesianIndex(elemIdx))) {
+        if (cartMapper_.cartesianIndex(elemIdx) >= matrixCellCount) {
             permeability_[elemIdx] *= poroData[inputDofIdx];
         }
     }
