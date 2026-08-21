@@ -182,7 +182,15 @@ update(bool global, const TransUpdateQuantities update_quantities,
     const auto& cartDims = cartMapper_.cartesianDimensions();
     const bool dualPorosity = eclState_.runspec().dualPorosity();
     const bool dualPermeability = eclState_.runspec().dualPermeability();
-    const auto& dpInputGrid = eclState_.getInputGrid();
+    // Twin classification is arithmetic on the global Cartesian index: the fracture half is
+    // the upper half of the index range.  Deriving it from the Cartesian dimensions keeps this
+    // rank-local -- EclipseState::getInputGrid() is available on the I/O rank only.
+    const std::size_t matrixCellCount =
+        (static_cast<std::size_t>(cartDims[0]) * cartDims[1] * cartDims[2]) / 2;
+    const auto isFractureCell = [matrixCellCount](const std::size_t cartIdx)
+    {
+        return cartIdx >= matrixCellCount;
+    };
     const auto& transMult = eclState_.getTransMult();
     const auto& comm = gridView_.comm();
     ElementMapper elemMapper(gridView_, Dune::mcmgElementLayout());
@@ -512,8 +520,8 @@ update(bool global, const TransUpdateQuantities update_quantities,
                 // only in dual-permeability runs; in single-permeability dual
                 // porosity the matrix half has no internal flow.
                 if (dualPorosity) {
-                    const bool insideFracture  = dpInputGrid.isFractureCell(inside.cartElemIdx);
-                    const bool outsideFracture = dpInputGrid.isFractureCell(outside.cartElemIdx);
+                    const bool insideFracture  = isFractureCell(inside.cartElemIdx);
+                    const bool outsideFracture = isFractureCell(outside.cartElemIdx);
                     if (insideFracture != outsideFracture) {
                         trans = 0.0;
                     }
@@ -1308,6 +1316,24 @@ applyNncToGridTrans_(const std::unordered_map<std::size_t,int>& cartesianToCompr
         }
 
         if (low == -1 || high == -1) {
+            // A dual-continuum coupling must never be silently discarded.  In a parallel run a
+            // cell missing from this rank's map is inactive OR owned by another rank, and both
+            // arrive here -- so this is the path by which a partition that separates a twin pair
+            // drops its coupling.  Measured on a 3x3x2 case: none split at two processes, at
+            // least four of nine at four processes.  Dual-continuum runs are refused before load
+            // balancing for exactly this reason; if that guard is ever lifted, this must be an
+            // error rather than a warning.
+            if (eclState_.runspec().dualPorosity()) {
+                const auto& cd = cartMapper_.cartesianDimensions();
+                const std::size_t half =
+                    (static_cast<std::size_t>(cd[0]) * cd[1] * cd[2]) / 2;
+                if ((c2 > c1 ? c2 - c1 : c1 - c2) == half) {
+                    OPM_THROW(std::runtime_error,
+                              "Dual-continuum coupling between cells " + std::to_string(c1) +
+                              " and " + std::to_string(c2) + " cannot be built: one of the two "
+                              "cells is inactive or not owned by this process.");
+                }
+            }
             // Discard the NNC if it is between active cell and inactive cell
             std::ostringstream sstr;
             sstr << "NNC between active and inactive cells ("
