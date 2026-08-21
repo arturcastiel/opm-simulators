@@ -912,6 +912,16 @@ void Transmissibility<Grid,GridView,ElementMapper,CartesianIndexMapper,Scalar>::
 removeNonCartesianTransmissibilities_(bool removeAll)
 {
     const auto& cartDims = cartMapper_.cartesianDimensions();
+
+    // A dual-continuum coupling is a connection between a cell and its twin, exactly
+    // half the Cartesian index range apart. It is the physics of the run, not a sparse
+    // non-neighbour connection the deck happened to add, so it must survive both the
+    // threshold prune and a blanket removal: a tight matrix with a small shape factor
+    // produces a legitimately small transmissibility, and zeroing it would strand the
+    // matrix continuum silently while the run completed and the material balance closed.
+    const bool dualPorosity = eclState_.runspec().dualPorosity();
+    const std::size_t twinGap = EclipseGrid::matrixCellCount(cartDims);
+
     for (auto&& trans: trans_) {
         //either remove all NNC transmissibilities or those less than the threshold (by default 1e-6 in the deck's unit system)
         if (removeAll || trans.second < transmissibilityThreshold_) {
@@ -924,6 +934,11 @@ removeNonCartesianTransmissibilities_(bool removeAll)
             // When LGRs, all neighbors in the LGR are cartesian neighbours on the level grid representing the LGR.
             // When elements on the leaf grid view have the same parent cell, gc1 and gc2 coincide.
             if (gc2 - gc1 == 1 || gc2 - gc1 == cartDims[0] || gc2 - gc1 == cartDims[0]*cartDims[1] || gc2 - gc1 == 0) {
+                continue;
+            }
+
+            // the matrix-fracture coupling, kept for the reason above
+            if (dualPorosity && (static_cast<std::size_t>(gc2 - gc1) == twinGap)) {
                 continue;
             }
 
