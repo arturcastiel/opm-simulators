@@ -787,9 +787,10 @@ applyDualPorosityPermScaling_(const std::function<unsigned int(unsigned int)>& m
     // fracture porosity unless the run disables that scaling. Matrix cells
     // are untouched, and so is the matrix-fracture coupling transmissibility
     // (it is computed from the matrix permeability upstream and arrives here
-    // as an input NNC).
-    const auto& rspec = eclState_.runspec();
-    if (!rspec.dualPorosity() || rspec.fracturePermeabilityScalingDisabled())
+    // as an input NNC). The rule itself is Runspec's -- the well connection
+    // factors apply the same one, and spelling it out separately here is how
+    // the two last diverged.
+    if (!eclState_.runspec().fracturePermeabilityScalingActive())
         return;
 
     const auto& fp = eclState_.fieldProps();
