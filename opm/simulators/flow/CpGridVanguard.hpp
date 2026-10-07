@@ -503,7 +503,8 @@ public:
 protected:
     void createGrids_()
     {
-        this->doCreateGrids_(this->edgeConformal(), this->lgrBackend() == "conforming", this->eclState());
+        this->doCreateGrids_(this->edgeConformal(), this->lgrBackend() == "conforming", this->eclState(),
+                             this->edgeConformalMergeTolerance());
     }
 
     void allocTrans() override
