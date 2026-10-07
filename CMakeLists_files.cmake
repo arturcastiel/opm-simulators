@@ -508,6 +508,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_LevelZeroRanks.cpp
   tests/test_LgrBlockData.cpp
   tests/test_LgrTransIndex.cpp
+  tests/test_lgr_nnc.cpp
   tests/test_linearleastsquares.cpp
   tests/test_LogOutputHelper.cpp
   tests/test_milu.cpp
@@ -743,6 +744,7 @@ list (APPEND TEST_DATA_FILES
   tests/GLIFT1.DATA
   tests/GPMAINT_LGR.DATA
   tests/RC-01_MAST_PRED.DATA
+  tests/LGR_NNC.DATA
   tests/include/flowl_b_vfp.ecl
   tests/include/flowl_c_vfp.ecl
   tests/include/permx_model5.grdecl
