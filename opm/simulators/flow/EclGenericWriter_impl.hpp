@@ -233,12 +233,14 @@ EclGenericWriter(const Schedule& schedule,
                  const Dune::CartesianIndexMapper<Grid>& cartMapper,
                  const Dune::CartesianIndexMapper<EquilGrid>* equilCartMapper,
                  bool enableAsyncOutput,
-                 bool enableEsmry )
+                 bool enableEsmry,
+                 const EquilGrid* collectGrid,
+                 const Dune::CartesianIndexMapper<EquilGrid>* collectCartMapper )
     : collectOnIORank_(grid,
-                       equilGrid,
+                       collectGrid ? collectGrid : equilGrid,
                        gridView,
                        cartMapper,
-                       equilCartMapper,
+                       collectCartMapper ? collectCartMapper : equilCartMapper,
                        summaryConfig.fip_regions_interreg_flow())
     , grid_           (grid)
     , gridView_       (gridView)
@@ -246,7 +248,9 @@ EclGenericWriter(const Schedule& schedule,
     , eclState_       (eclState)
     , cartMapper_     (cartMapper)
     , equilCartMapper_(equilCartMapper)
+    , collectCartMapper_(collectCartMapper ? collectCartMapper : equilCartMapper)
     , equilGrid_      (equilGrid)
+    , collectGrid_    (collectGrid ? collectGrid : equilGrid)
 {
     // Make sure outputNnc_ vector has at least 1 entry in all ranks.
     outputNnc_.resize(1);
@@ -329,8 +333,8 @@ extractOutputTransAndNNC(const std::function<unsigned int(unsigned int)>& map)
         const auto levelCartMapp = this->createLevelCartMapp_<equilGridIsCpGrid>();
         const auto levelCartToLevelCompressed = this->createCartesianToActiveMaps_<equilGridIsCpGrid>(levelCartMapp);
         auto computeLevelIndices = this->computeLevelIndices_<equilGridIsCpGrid>();
-        auto computeLevelCartIdx = this->computeLevelCartIdx_<equilGridIsCpGrid>(levelCartMapp, *(this->equilCartMapper_));
-        auto computeLevelCartDimensions = this->computeLevelCartDimensions_<equilGridIsCpGrid>(levelCartMapp, *(this->equilCartMapper_));
+        auto computeLevelCartIdx = this->computeLevelCartIdx_<equilGridIsCpGrid>(levelCartMapp, *(this->collectCartMapper_));
+        auto computeLevelCartDimensions = this->computeLevelCartDimensions_<equilGridIsCpGrid>(levelCartMapp, *(this->collectCartMapper_));
         auto computeOriginIndices = this->computeOriginIndices_<equilGridIsCpGrid>();
 
         computeTrans_(levelCartToLevelCompressed, map, computeLevelIndices,
@@ -379,9 +383,9 @@ EclGenericWriter<Grid,EquilGrid,GridView,ElementMapper,Scalar>::
 createLevelCartMapp_() const
 {
     if constexpr (equilGridIsCpGrid) {
-        return Opm::LevelCartesianIndexMapper<EquilGrid>(*this->equilGrid_);
+        return Opm::LevelCartesianIndexMapper<EquilGrid>(*this->collectGrid_);
     } else {
-        return Opm::LevelCartesianIndexMapper<EquilGrid>(*equilCartMapper_); }
+        return Opm::LevelCartesianIndexMapper<EquilGrid>(*collectCartMapper_); }
 }
 
 template<class Grid, class EquilGrid, class GridView, class ElementMapper, class Scalar>
@@ -391,13 +395,13 @@ EclGenericWriter<Grid,EquilGrid,GridView,ElementMapper,Scalar>::
 createCartesianToActiveMaps_(const Opm::LevelCartesianIndexMapper<EquilGrid>& levelCartMapp) const
 {
     if constexpr (equilGridIsCpGrid) {
-        if (this->equilGrid_->maxLevel()) {
-            return Opm::Lgr::levelCartesianToLevelCompressedMaps(*this->equilGrid_, levelCartMapp); }
+        if (this->collectGrid_->maxLevel()) {
+            return Opm::Lgr::levelCartesianToLevelCompressedMaps(*this->collectGrid_, levelCartMapp); }
         else {
-            return std::vector<std::unordered_map<int,int>>{ cartesianToCompressed(equilGrid_->size(0), UgGridHelpers::globalCell(*equilGrid_)) };
+            return std::vector<std::unordered_map<int,int>>{ cartesianToCompressed(collectGrid_->size(0), UgGridHelpers::globalCell(*collectGrid_)) };
         }
     }
-    return std::vector<std::unordered_map<int,int>>{ cartesianToCompressed(equilGrid_->size(0), UgGridHelpers::globalCell(*equilGrid_)) };
+    return std::vector<std::unordered_map<int,int>>{ cartesianToCompressed(collectGrid_->size(0), UgGridHelpers::globalCell(*collectGrid_)) };
 }
 
 template<class Grid, class EquilGrid, class GridView, class ElementMapper, class Scalar>
@@ -531,11 +535,11 @@ computeTrans_(const std::vector<std::unordered_map<int,int>>&  levelCartToLevelC
 
     using GlobalGridView = typename EquilGrid::LeafGridView;
     using GlobElementMapper = Dune::MultipleCodimMultipleGeomTypeMapper<GlobalGridView>;
-    const GlobalGridView& globalGridView = this->equilGrid_->leafGridView();
+    const GlobalGridView& globalGridView = this->collectGrid_->leafGridView();
     const GlobElementMapper globalElemMapper { globalGridView, Dune::mcmgElementLayout() };
 
     // Refinement supported only for CpGrid for now.
-    int maxLevel = this->equilGrid_->maxLevel();
+    int maxLevel = this->collectGrid_->maxLevel();
 
     outputTrans_->resize(maxLevel+1); // including level zero grid
 
@@ -706,16 +710,16 @@ exportNncStructure_(const std::vector<std::unordered_map<int,int>>& levelCartToL
     const auto& transMult = this->eclState_.getTransMult();
 
     // Cartesian index mapper for the serial I/O grid
-    const auto& equilCartMapper = *equilCartMapper_;
+    const auto& equilCartMapper = *collectCartMapper_;
 
     const auto& level0CartDims = equilCartMapper.cartesianDimensions();
 
-    int maxLevel = this->equilGrid_->maxLevel();
+    int maxLevel = this->collectGrid_->maxLevel();
     allocateAllNncs_(maxLevel);
 
     using GlobalGridView = typename EquilGrid::LeafGridView;
     using GlobElementMapper = Dune::MultipleCodimMultipleGeomTypeMapper<GlobalGridView>;
-    const GlobalGridView& globalGridView = this->equilGrid_->leafGridView();
+    const GlobalGridView& globalGridView = this->collectGrid_->leafGridView();
     const GlobElementMapper globalElemMapper { globalGridView, Dune::mcmgElementLayout() };
 
     for (const auto& elem : elements(globalGridView)) {

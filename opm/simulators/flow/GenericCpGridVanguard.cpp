@@ -35,6 +35,8 @@
 #include <opm/grid/cpgrid/GridHelpers.hpp>
 #include <opm/grid/cpgrid/LevelCartesianIndexMapper.hpp>
 
+#include <opm/grid/cpgrid/refinement/GridStateWriter.hpp>
+
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
 #include <opm/input/eclipse/Schedule/Schedule.hpp>
 #include <opm/input/eclipse/Schedule/Well/Well.hpp>
@@ -571,6 +573,9 @@ doCreateGrids_(const bool edge_conformal, const bool conformingLgr, EclipseState
     // simulation grid is distributed before the initial condition is
     // calculated.
     //
+    // Raised by the I/O reference grid's refinement, which runs on rank 0 alone.
+    std::string outputGridError{};
+
     // After loadbalance, grid_ will contain a global and distribute view.
     // equilGrid_ being a shallow copy only the global view.
     if (isRoot) {
@@ -578,9 +583,75 @@ doCreateGrids_(const bool edge_conformal, const bool conformingLgr, EclipseState
         this->equilCartesianIndexMapper_ =
             std::make_unique<CartesianIndexMapper>(*this->equilGrid_);
 
+#if HAVE_MPI
+        // For a parallel run with LGRs, the simulation grid is refined only
+        // after distribution (rank-interior refinement) and equilGrid_ stays
+        // coarse.  ECL output gathers cell data onto the I/O rank using a
+        // reference grid, which must therefore carry the refined leaf cells.
+        // Build a self-communicator copy of the global grid and refine it
+        // locally - getCommunicator() in the refinement builder follows the
+        // grid's own communicator, so this is collective-free - giving the
+        // I/O rank the same full refined grid a serial run would have.
+        // equilGrid_ is left coarse for EQUIL; this is a separate grid used
+        // only for output.
+        if (this->grid_->comm().size() > 1 && input_grid != nullptr && conformingLgr) {
+            if (const auto& lgrs = eclState.getLgrs(); lgrs.size() > 0) {
+                // This backend refines from a retained corner-point
+                // description rather than from the grid itself, so hand the
+                // fresh grid the copy that grid_ (still undistributed here)
+                // is holding.  Without it there is nothing to refine from and
+                // the I/O rank is left without a refined reference grid.
+                auto retained = Opm::Refinement::GridStateWriter::retainedCornerPointInput(
+                    *this->grid_->currentData().front());
+                if (retained) try {
+                    auto outGrid = std::make_unique<Dune::CpGrid>(Dune::MPIHelper::getLocalCommunicator());
+                    outGrid->setLgrBackend(Opm::Refinement::Backend::Conforming);
+                    // Build it from the corner-point description grid_ was
+                    // built from, not from the input grid again: MINPV works by
+                    // collapsing ZCORN, and re-processing without an
+                    // EclipseState skips MINPV and PINCH altogether (their whole
+                    // block is gated on it). The reference grid then keeps cells
+                    // the simulation grid does not have, and gathering onto the
+                    // I/O rank leaves them claimed by no rank -- 399 of them on
+                    // Norne, being the 496 MINPV removed less the 97 inside the
+                    // refinement box, which the box refines away.
+                    const grdecl raw {
+                        { retained->dims[0], retained->dims[1], retained->dims[2] },
+                        retained->coord.data(),
+                        retained->zcorn.data(),
+                        retained->actnum.empty() ? nullptr : retained->actnum.data()
+                    };
+                    outGrid->processEclipseFormat(raw, retained->pinchNnc,
+                                                  retained->pinchActive,
+                                                  retained->edgeConformal);
+                    Opm::Refinement::GridStateWriter::setRetainedCornerPointInput(
+                        *outGrid->currentData().front(), retained);
+                    this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *outGrid);
+                    this->outputGrid_ = std::move(outGrid);
+                    this->outputCartesianIndexMapper_ =
+                        std::make_unique<CartesianIndexMapper>(*this->outputGrid_);
+                }
+                catch (const std::exception& e) {
+                    outputGridError = e.what();
+                }
+            }
+        }
+#endif
+
         eclState.reset_actnum(UgGridHelpers::createACTNUM(*this->grid_));
         eclState.set_active_indices(this->grid_->globalCell());
     }
+
+#if HAVE_MPI
+    // Rank 0's refusal must stop every rank, which would otherwise wait below.
+    if (this->grid_->comm().size() > 1) {
+        Parallel::MpiSerializer ser(this->grid_->comm());
+        ser.broadcast(Parallel::RootRank{0}, outputGridError);
+        if (!outputGridError.empty()) {
+            OPM_THROW(std::invalid_argument, outputGridError);
+        }
+    }
+#endif
 
     {
         auto size = removed_cells.size();
@@ -759,6 +830,23 @@ GenericCpGridVanguard<ElementMapper,GridView,Scalar>::equilCartesianIndexMapper(
     assert(mpiRank == 0);
     assert(equilCartesianIndexMapper_);
     return *equilCartesianIndexMapper_;
+}
+
+template<class ElementMapper, class GridView, class Scalar>
+const Dune::CpGrid&
+GenericCpGridVanguard<ElementMapper,GridView,Scalar>::eclOutputGrid() const
+{
+    assert(mpiRank == 0);
+    return outputGrid_ ? *outputGrid_ : *equilGrid_;
+}
+
+template<class ElementMapper, class GridView, class Scalar>
+const Dune::CartesianIndexMapper<Dune::CpGrid>&
+GenericCpGridVanguard<ElementMapper,GridView,Scalar>::eclOutputCartesianIndexMapper() const
+{
+    assert(mpiRank == 0);
+    return outputCartesianIndexMapper_ ? *outputCartesianIndexMapper_
+                                       : *equilCartesianIndexMapper_;
 }
 
 template<class ElementMapper, class GridView, class Scalar>
