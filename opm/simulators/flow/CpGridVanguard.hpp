@@ -27,6 +27,7 @@
 #ifndef OPM_CPGRID_VANGUARD_HPP
 #define OPM_CPGRID_VANGUARD_HPP
 
+#include <opm/common/ErrorMacros.hpp>
 #include <opm/common/TimingMacros.hpp>
 
 #include <opm/models/common/multiphasebaseproperties.hh>
@@ -38,6 +39,8 @@
 #include <opm/simulators/flow/Transmissibility.hpp>
 
 #include <array>
+#include <exception>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -45,6 +48,8 @@
 #include <tuple>
 #include <type_traits>
 #include <vector>
+
+#include <fmt/format.h>
 
 namespace Opm {
 template <class TypeTag>
@@ -278,22 +283,41 @@ public:
         // In a parallel run, this adds the LGRs on the distributed simulation grid.
         if (const auto& lgrs = this->eclState().getLgrs(); lgrs.size() > 0) {
             OpmLog::info("\nAdding LGRs to the grid and updating its leaf grid view");
-            this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *this->grid_);
+            // Each rank refines its own boxes; a refusal on one must stop all of them.
+            std::exception_ptr refineError;
+            try {
+                this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *this->grid_);
+            }
+            catch (...) {
+                refineError = std::current_exception();
+            }
+            if (this->grid_->comm().max(refineError ? 1 : 0) > 0) {
+                if (refineError) {
+                    std::rethrow_exception(refineError);
+                }
+                OPM_THROW(std::runtime_error, "Adding the LGRs failed on another rank.");
+            }
 
             this->updateGridView_();
             this->updateCartesianToCompressedMapping_();
             this->updateCellDepths_();
             this->updateCellThickness_();
 
-            if (this->grid_->comm().size()>1) {
-                // Add LGRs and update the leaf grid view in the global (undistributed) simulation grid.
-                // Purpose: To enable synchronization of cell ids in 'serial mode',
-                //          we rely on the "parent-to-children" cell id mapping.
-                OpmLog::info("\nAdding LGRs to the global view and updating its leaf grid view");
-                this->grid_->switchToGlobalView();
-                this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *this->grid_);
-                this->grid_->switchToDistributedView();
-                this->grid_->syncDistributedGlobalCellIds();
+            // The global-view refinement + id sync below is the original
+            // implementation's way to make refined cell ids globally
+            // consistent. The rank-interior refinement builder (the fork)
+            // produces deterministic per-rank refinement and does not use it.
+            if (this->grid_->lgrBackend() == Opm::Refinement::Backend::Trilinear) {
+                if (this->grid_->comm().size()>1) {
+                    // Add LGRs and update the leaf grid view in the global (undistributed) simulation grid.
+                    // Purpose: To enable synchronization of cell ids in 'serial mode',
+                    //          we rely on the "parent-to-children" cell id mapping.
+                    OpmLog::info("\nAdding LGRs to the global view and updating its leaf grid view");
+                    this->grid_->switchToGlobalView();
+                    this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *this->grid_);
+                    this->grid_->switchToDistributedView();
+                    this->grid_->syncDistributedGlobalCellIds();
+                }
             }
         }
     }
