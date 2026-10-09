@@ -343,7 +343,20 @@ public:
         auto partMethod = this->partitionMethod();
         if (this->grid_->comm().size() > 1) {
             if (const auto& lgrs = this->eclState().getLgrs(); lgrs.size() > 0) {
-                if (applyLgrPartitionCellGroups_(lgrs, lgrOverlap)) {
+                if (this->refineBeforeRedistribute()) {
+                    if (!conforming) {
+                        OPM_THROW(std::invalid_argument, "--refine-before-redistribute needs "
+                                  "--lgr-backend=conforming.");
+                    }
+                    // Refine the global grid before load balancing: the partitioner then
+                    // weights each coarse cell by its refined cells and distributes the
+                    // leaf, splitting boxes as needed, so no cell groups here.
+                    OpmLog::info("\nRefine-before-redistribute: adding LGRs to "
+                                 "the grid before load balancing");
+                    this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *this->grid_);
+                    this->updateGridView_();
+                    partMethod = Dune::PartitionMethod::zoltanGoG;
+                } else if (applyLgrPartitionCellGroups_(lgrs, lgrOverlap)) {
                     overlapLayers = lgrOverlap;
                     partMethod = Dune::PartitionMethod::zoltanGoG;
                 }
@@ -382,6 +395,17 @@ public:
         // Check if input file contains Lgrs. Add them, if any.
         // In a parallel run, this adds the LGRs on the distributed simulation grid.
         if (const auto& lgrs = this->eclState().getLgrs(); lgrs.size() > 0) {
+            // With the experimental refine-before-redistribute option the LGRs
+            // are already added in loadBalance() for a parallel run (before the
+            // grid is distributed), so don't add them again here. The check is on
+            // comm().size() > 1, not maxLevel(): once the refined leaf has been
+            // distributed the distributed grid carries the leaf as its only level
+            // (maxLevel() == 0 again), so a maxLevel() test would wrongly re-add
+            // the LGRs. In a serial refine-before run loadBalance() does not add
+            // the LGRs, so they are still added below.
+            if (this->refineBeforeRedistribute() && this->grid_->comm().size() > 1) {
+                return;
+            }
             OpmLog::info("\nAdding LGRs to the grid and updating its leaf grid view");
             // Each rank refines its own boxes; a refusal on one must stop all of them.
             std::exception_ptr refineError;
