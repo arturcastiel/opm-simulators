@@ -30,6 +30,8 @@
 #include <opm/common/ErrorMacros.hpp>
 #include <opm/common/TimingMacros.hpp>
 
+#include <opm/input/eclipse/EclipseState/Grid/LgrConnectionCheck.hpp>
+
 #include <opm/models/common/multiphasebaseproperties.hh>
 #include <opm/models/blackoil/blackoilproperties.hh>
 #include <opm/simulators/flow/FemCpGridCompat.hpp>
@@ -38,15 +40,20 @@
 #include <opm/simulators/flow/GenericCpGridVanguard.hpp>
 #include <opm/simulators/flow/Transmissibility.hpp>
 
+#include <algorithm>
 #include <array>
 #include <exception>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <memory>
+#include <numeric>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -237,12 +244,87 @@ public:
     }
 
     /*!
+     * \brief Tell the partitioner to keep each LGR region on one rank.
+     *
+     * One cell group per CARFIN box; the grid grows each by `halo` layers over
+     * its real connections, and groups that then meet stay on one rank together.
+     * Returns true if the grid supports this (the LGR-refinement fork).
+     */
+    template <class Lgrs>
+    bool applyLgrPartitionCellGroups_([[maybe_unused]] const Lgrs& lgrs,
+                                      [[maybe_unused]] int halo)
+    {
+        if (this->grid_->lgrBackend() == Opm::Refinement::Backend::Conforming) {
+            const auto dims = this->grid_->logicalCartesianSize();
+            std::vector<std::set<int>> cellGroups;
+            cellGroups.reserve(lgrs.size());
+            for (std::size_t l = 0; l < lgrs.size(); ++l) {
+                const auto c = lgrs.getLgr(static_cast<int>(l));
+                // A nested LGR addresses its parent's local Cartesian space and
+                // lies inside the parent's box, which already keeps it together.
+                if (c.PARENT_NAME() != "GLOBAL") {
+                    continue;
+                }
+                auto& cells = cellGroups.emplace_back();
+                for (int k = c.K1(); k <= c.K2(); ++k) {
+                    for (int j = c.J1(); j <= c.J2(); ++j) {
+                        for (int i = c.I1(); i <= c.I2(); ++i) {
+                            cells.insert(i + dims[0] * j + dims[0] * dims[1] * k);
+                        }
+                    }
+                }
+            }
+            const auto numGroups = cellGroups.size();
+
+            // The rank-interior model requires each group to live entirely on one
+            // rank. If a single box is so large that confining it to one rank
+            // would leave another rank with no cells, the constraint is
+            // unsatisfiable (e.g. an LGR that covers essentially the whole grid).
+            // Detect that here and fail with a clear, actionable message rather
+            // than aborting deep in the partitioner. The groups are built
+            // identically on every rank, so this test is collective-safe.
+            const int numRanks = this->grid_->comm().size();
+            std::size_t maxGroup = 0;
+            for (const auto& g : cellGroups) {
+                maxGroup = std::max(maxGroup, g.size());
+            }
+            const std::size_t totalCart = static_cast<std::size_t>(dims[0]) * dims[1] * dims[2];
+            if (numRanks > 1 && maxGroup + static_cast<std::size_t>(numRanks - 1) > totalCart) {
+                OPM_THROW(std::runtime_error,
+                          "An LGR refinement region spans "
+                          + std::to_string(maxGroup) + " of " + std::to_string(totalCart)
+                          + " cells, too much to keep on a single rank when running on "
+                          + std::to_string(numRanks) + " MPI ranks. The rank-interior "
+                          "parallel LGR model needs each refinement box to fit inside one "
+                          "rank's interior, so an LGR covering (nearly) the whole grid "
+                          "cannot be distributed. Run this case on a single MPI rank, or "
+                          "reduce the extent of the refinement box(es).");
+            }
+
+            this->grid_->setPartitionCellGroups(std::move(cellGroups), halo);
+            OpmLog::info("Keeping " + std::to_string(numGroups)
+                         + " LGR region(s) (with halo) together for load balancing.");
+            return true;
+        }
+        return false;
+    }
+
+    /*!
      * \brief Distribute the simulation grid over multiple processes
      *
      * (For parallel simulation runs.)
      */
     void loadBalance()
     {
+        // Decided on every rank, and before the transmissibility the I/O rank
+        // builds for load balancing and output can hit the same refusal on its
+        // own: a rank that throws alone leaves the others in a collective.
+        const bool conforming = this->grid_->lgrBackend() == Opm::Refinement::Backend::Conforming;
+        if (const auto& lgrs = this->eclState().getLgrs(); conforming && lgrs.size() > 0) {
+            refuseDeckConnectionsInsideBoxes(this->eclState(),
+                                             this->grid_->logicalCartesianSize(),
+                                             lgrCellBoxes(lgrs));
+        }
 #if HAVE_MPI
         if (const auto& extPFile = this->externalPartitionFile();
             !extPFile.empty() && (extPFile != "none"))
@@ -250,9 +332,27 @@ public:
             this->setExternalLoadBalancer(details::MPIPartitionFromFile { extPFile });
         }
 
+        // LGR-aware partitioning: keep each refinement region (and groups of
+        // touching ones) on a single rank so the rank-interior refinement
+        // builder never splits a box across ranks. Needs the cell-group
+        // partitioner (zoltanGoG) and, for a contracted interior region,
+        // overlap layer 2 (a single layer misses corner/edge neighbours).
+        int overlapLayers = this->numOverlap();
+        // Each box is kept as many layers clear of other ranks as the overlap.
+        const int lgrOverlap = std::max(overlapLayers, 2);
+        auto partMethod = this->partitionMethod();
+        if (this->grid_->comm().size() > 1) {
+            if (const auto& lgrs = this->eclState().getLgrs(); lgrs.size() > 0) {
+                if (applyLgrPartitionCellGroups_(lgrs, lgrOverlap)) {
+                    overlapLayers = lgrOverlap;
+                    partMethod = Dune::PartitionMethod::zoltanGoG;
+                }
+            }
+        }
+
         this->doLoadBalance_(this->edgeWeightsMethod(), this->ownersFirst(),
-                             this->addCorners(), this->numOverlap(),
-                             this->partitionMethod(), this->serialPartitioning(),
+                             this->addCorners(), overlapLayers,
+                             partMethod, this->serialPartitioning(),
                              this->enableDistributedWells(),
                              this->allow_splitting_inactive_wells_,
                              this->imbalanceTol(),
