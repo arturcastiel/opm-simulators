@@ -467,7 +467,7 @@ distributeGrid(const Dune::EdgeWeightMethod                          edgeWeights
 
 template<class ElementMapper, class GridView, class Scalar>
 void GenericCpGridVanguard<ElementMapper,GridView,Scalar>::
-doCreateGrids_(const bool edge_conformal, EclipseState& eclState)
+doCreateGrids_(const bool edge_conformal, const bool conformingLgr, EclipseState& eclState)
 {
     const auto isRoot = this->mpiRank == 0;
 
@@ -490,6 +490,10 @@ doCreateGrids_(const bool edge_conformal, EclipseState& eclState)
 #else
     this->grid_ = std::make_unique<Dune::CpGrid>();
 #endif
+    // Chosen before processing, which keeps the corner-point input the Conforming builder needs.
+    if (conformingLgr) {
+        this->grid_->setLgrBackend(Opm::Refinement::Backend::Conforming);
+    }
 
     // Note: removed_cells is guaranteed to be empty on ranks other than 0.
     auto removed_cells = this->grid_

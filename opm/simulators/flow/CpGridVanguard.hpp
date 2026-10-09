@@ -33,6 +33,7 @@
 #include <opm/models/blackoil/blackoilproperties.hh>
 #include <opm/simulators/flow/FemCpGridCompat.hpp>
 #include <opm/simulators/flow/FlowBaseVanguard.hpp>
+#include <opm/simulators/flow/FlowProblemParameters.hpp>
 #include <opm/simulators/flow/GenericCpGridVanguard.hpp>
 #include <opm/simulators/flow/Transmissibility.hpp>
 
@@ -40,7 +41,9 @@
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace Opm {
@@ -323,7 +326,7 @@ public:
 protected:
     void createGrids_()
     {
-        this->doCreateGrids_(this->edgeConformal(), this->eclState());
+        this->doCreateGrids_(this->edgeConformal(), this->lgrBackend() == "conforming", this->eclState());
     }
 
     void allocTrans() override
