@@ -319,6 +319,12 @@ public:
                     this->grid_->syncDistributedGlobalCellIds();
                 }
             }
+
+            // A COMPDAT connection inside a box moves into the innermost LGR covering it
+            // by index, with its connection factor rescaled; the same on every rank.
+            if (this->grid_->lgrBackend() == Opm::Refinement::Backend::Conforming) {
+                this->schedule().refineConnectionsIntoLgrs(lgrs);
+            }
         }
     }
 
