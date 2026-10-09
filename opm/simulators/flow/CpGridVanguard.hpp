@@ -31,6 +31,7 @@
 #include <opm/common/TimingMacros.hpp>
 
 #include <opm/input/eclipse/EclipseState/Grid/LgrConnectionCheck.hpp>
+#include <opm/input/eclipse/Schedule/Well/WellConnections.hpp>
 
 #include <opm/models/common/multiphasebaseproperties.hh>
 #include <opm/models/blackoil/blackoilproperties.hh>
@@ -131,6 +132,34 @@ public:
     {
         this->checkConsistency();
         this->callImplementationInit();
+    }
+
+    /// The LGR a connection's grid number names: a deck LGR by its deck
+    /// number, else the grid level itself.
+    std::string lgrTagOfConnection(const Connection& conn) const
+    {
+        const int n = conn.get_lgr_level();
+        const auto& lgrs = this->eclState().getLgrs();
+        if (n >= 1 && static_cast<std::size_t>(n) <= lgrs.size()) {
+            return lgrs.getLgr(static_cast<std::size_t>(n) - 1).NAME();
+        }
+        for (const auto& [name, level] : this->grid().getLgrNameToLevel()) {
+            if (level == n) {
+                return name;
+            }
+        }
+        OPM_THROW(std::logic_error,
+                  fmt::format("Connection ({},{},{}) names LGR grid number {}, which "
+                              "neither the deck nor the grid has.",
+                              conn.getI() + 1, conn.getJ() + 1, conn.getK() + 1, n));
+    }
+
+    /// Leaf cell of a connection, resolved against the connection's own LGR.
+    int compressedIndexForConnection(const Connection& conn) const
+    {
+        return (conn.get_lgr_level() > 0)
+            ? this->compressedIndexForInteriorLGR(this->lgrTagOfConnection(conn), conn)
+            : this->compressedIndexForInterior(conn.global_index());
     }
 
     int compressedIndexForInteriorLGR(const std::string& lgr_tag, const Connection& conn) const override
