@@ -55,9 +55,11 @@
 #include <opm/simulators/flow/FemCpGridCompat.hpp>
 #endif //HAVE_DUNE_FEM
 
+#include <algorithm>
 #include <cassert>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -605,10 +607,22 @@ void GenericCpGridVanguard<ElementMapper,GridView,Scalar>::addLgrsUpdateLeafView
     std::vector<std::array<int,3>> startIJK_vec;
     std::vector<std::array<int,3>> endIJK_vec;
     std::vector<std::string> lgrName_vec;
+    std::vector<std::string> lgrParentName_vec;
     cells_per_dim_vec.reserve(lgrsSize);
     startIJK_vec.reserve(lgrsSize);
     endIJK_vec.reserve(lgrsSize);
     lgrName_vec.reserve(lgrsSize);
+    lgrParentName_vec.reserve(lgrsSize);
+    // A graded box (N*FIN/H*FIN) has no single subdivision factor, so it goes
+    // through the request-taking overload with its column tables. Boxes are
+    // graded per direction, and a direction the deck did not grade is left
+    // empty so it keeps the uniform path.
+    std::vector<Opm::Refinement::AxisSubdivision> subdivisions;
+    subdivisions.reserve(3*lgrsSize);
+    std::vector<std::vector<int>> minpvRemoved;
+    minpvRemoved.reserve(lgrsSize);
+    bool anyGraded = false;
+
     for (int lgr = 0; lgr < lgrsSize; ++lgr)
     {
         const auto lgrCarfin = lgrCollection.getLgr(lgr);
@@ -617,8 +631,103 @@ void GenericCpGridVanguard<ElementMapper,GridView,Scalar>::addLgrsUpdateLeafView
         startIJK_vec.push_back({lgrCarfin.I1(), lgrCarfin.J1(), lgrCarfin.K1()});
         endIJK_vec.push_back({lgrCarfin.I2()+1, lgrCarfin.J2()+1, lgrCarfin.K2()+1});
         lgrName_vec.emplace_back(lgrCarfin.NAME());
+        lgrParentName_vec.emplace_back(lgrCarfin.PARENT_NAME());
+
+        anyGraded = anyGraded || lgrCarfin.isGraded();
+        minpvRemoved.push_back(lgrCarfin.minpvRemoved());
+        for (std::size_t dim = 0; dim < 3; ++dim) {
+            auto columns = lgrCarfin.refinedColumns(dim);
+            subdivisions.push_back(Opm::Refinement::AxisSubdivision{
+                std::move(columns.parentOffset),
+                std::move(columns.fracLo),
+                std::move(columns.fracHi) });
+        }
     }
-    grid.addLgrsUpdateLeafView(cells_per_dim_vec, startIJK_vec, endIJK_vec, lgrName_vec);
+
+    // Common case: no nesting (every CARFIN refines GLOBAL). Take the exact
+    // original code path - the 4-arg call, no reordering, no parent vector -
+    // so single-level decks are completely unaffected by the nested-LGR
+    // machinery below.
+    const bool anyNested = std::any_of(lgrParentName_vec.begin(), lgrParentName_vec.end(),
+                                       [](const std::string& p) { return p != "GLOBAL"; });
+    // Build the requests from the pieces above; only a graded deck carries the
+    // column tables, so a uniform deck reaches the builder exactly as before.
+    const auto makeRequests = [&](const std::vector<int>& order) {
+        std::vector<Opm::Refinement::BlockRefinement> requests;
+        requests.reserve(order.size());
+        for (const int lgr : order) {
+            Opm::Refinement::BlockRefinement request;
+            request.name = lgrName_vec[lgr];
+            request.parentGridName = lgrParentName_vec[lgr];
+            request.cellsPerDim = cells_per_dim_vec[lgr];
+            request.startIJK = startIJK_vec[lgr];
+            request.endIJK = endIJK_vec[lgr];
+            if (anyGraded) {
+                for (std::size_t dim = 0; dim < 3; ++dim) {
+                    request.subdivision[dim] = subdivisions[3*lgr + dim];
+                }
+            }
+            request.minpvRemoved = minpvRemoved[lgr];
+            request.pillarsFromBoxLayer = lgrCollection.pillarsFromBoxLayer();
+            requests.push_back(std::move(request));
+        }
+        return requests;
+    };
+
+    if (!anyNested) {
+        std::vector<int> deckOrder(lgrsSize);
+        std::iota(deckOrder.begin(), deckOrder.end(), 0);
+        grid.addLgrsUpdateLeafView(makeRequests(deckOrder));
+        return;
+    }
+
+    // Order the LGRs so a parent grid is always added before its children: the
+    // conforming builder appends level grids in request order and resolves each
+    // box's parent by name, so a child must follow its parent. Use a STABLE
+    // topological order that preserves the deck order otherwise - a child is
+    // only deferred until after its parent. This matters because the level
+    // numbering produced here (CpGrid level = position in this order) must match
+    // opm-common's LGR numbering, which is the deck order: the per-LGR ECL
+    // output pairs each level's data with the LGR at the same position, so a
+    // depth-grouping sort (which reorders sibling top-level LGRs around a nested
+    // one) would mispair the output. A valid deck (parent before child) is left
+    // exactly in deck order.
+    std::map<std::string,int> indexOfName;
+    for (int i = 0; i < lgrsSize; ++i) {
+        indexOfName[lgrName_vec[i]] = i;
+    }
+    const auto parentIndex = [&](int i) -> int {
+        if (lgrParentName_vec[i] == "GLOBAL") {
+            return -1;
+        }
+        const auto it = indexOfName.find(lgrParentName_vec[i]);
+        return (it == indexOfName.end()) ? -1 : it->second;  // unknown parent: builder reports it
+    };
+    std::vector<int> order;
+    order.reserve(lgrsSize);
+    std::vector<char> placed(lgrsSize, 0);
+    bool progress = true;
+    while (static_cast<int>(order.size()) < lgrsSize && progress) {
+        progress = false;
+        for (int i = 0; i < lgrsSize; ++i) {           // deck order within each pass
+            if (placed[i]) {
+                continue;
+            }
+            const int p = parentIndex(i);
+            if (p < 0 || placed[p]) {                  // parent is GLOBAL/unknown or already placed
+                order.push_back(i);
+                placed[i] = 1;
+                progress = true;
+            }
+        }
+    }
+    for (int i = 0; i < lgrsSize; ++i) {               // any leftovers (cycle): builder reports it
+        if (!placed[i]) {
+            order.push_back(i);
+        }
+    }
+
+    grid.addLgrsUpdateLeafView(makeRequests(order));
 };
 
 template<class ElementMapper, class GridView, class Scalar>
