@@ -378,6 +378,7 @@ public:
             }
         }
 
+        this->grid_->setCornerCellsByVertex(this->addCornersByVertex());
         this->doLoadBalance_(this->edgeWeightsMethod(), this->ownersFirst(),
                              this->addCorners(), overlapLayers,
                              partMethod, this->serialPartitioning(),
