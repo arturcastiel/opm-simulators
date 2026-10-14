@@ -358,6 +358,14 @@ protected:
         // Runs again after LGRs are added, which renumbers the leaf cells.
         cartesianToCompressed_.clear();
 
+        // A grid refined before load balancing is distributed as a flat leaf:
+        // its refined cells have no father, but know their place in it.
+        bool flatRefinedLeaf = false;
+        if constexpr (requires { this->gridView().grid().leafHasParentCellIndices(); }) {
+            flatRefinedLeaf = (this->gridView().grid().maxLevel() == 0)
+                && this->gridView().grid().leafHasParentCellIndices();
+        }
+
         ElementMapper elemMapper(this->gridView(), Dune::mcmgElementLayout());
         for (const auto& element : elements(this->gridView()))
         {
@@ -365,7 +373,11 @@ protected:
             // The refined cells of an LGR share their parent cell's Cartesian
             // index.  The map holds unrefined cells only, so the index of a
             // refined parent cell maps to no cell.
-            if (!element.hasFather()) {
+            bool refined = element.hasFather();
+            if constexpr (requires { element.getIdxInParentCell(); }) {
+                refined = refined || (flatRefinedLeaf && (element.getIdxInParentCell() >= 0));
+            }
+            if (!refined) {
                 unsigned cartesianCellIdx = cartesianIndex(elemIdx);
                 cartesianToCompressed_[cartesianCellIdx] = elemIdx;
             }
