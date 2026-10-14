@@ -348,9 +348,9 @@ writeInit()
             auto ranks = collectOnIORank_.globalRanks();
             if constexpr (std::is_same_v<EquilGrid, Dune::CpGrid>) {
                 // MPI_RANK holds one value per level-0 cell, globalRanks() one
-                // per leaf cell.
-                if (this->equilGrid_->maxLevel() > 0) {
-                    ranks = levelZeroRanks(*this->equilGrid_, ranks);
+                // per leaf cell of the grid the cells are collected on.
+                if (this->collectGrid_->maxLevel() > 0) {
+                    ranks = levelZeroRanks(*this->collectGrid_, ranks);
                 }
             }
             integerVectors.emplace("MPI_RANK", std::move(ranks));
@@ -1144,15 +1144,22 @@ doWriteOutput(const int                          reportStepNum,
     }
 
     std::vector<Opm::RestartValue> restartValues{};
-    // only CpGrid (for now)
-    if ( !needsReordering && (this->eclState_.getLgrs().size()>0) && (this->grid_.maxLevel()>0) ) {
+    // only CpGrid (for now).  A grid refined before load balancing is
+    // distributed as a flat leaf without levels; the grid the I/O rank collects
+    // the cells on has them.
+    const bool collectedOnLevels = isParallel && (this->collectGrid_ != nullptr)
+        && (this->collectGrid_->maxLevel() > 0);
+    if ( !needsReordering && (this->eclState_.getLgrs().size()>0)
+         && ((this->grid_.maxLevel()>0) || collectedOnLevels) ) {
         // Level cells that appear on the leaf grid view get the data::Solution values from there.
         // Other cells (i.e., parent cells that vanished due to refinement) get rubbish values for now.
         // Only data::Solution is restricted to the level grids. Well, GroupAndNetwork, Aquifer are
         // not modified in this method.
         if (isParallel) {
-            // The I/O rank holds the collected solution in the leaf order of the global grid.
-            Opm::Lgr::extractRestartValueLevelGrids<EquilGrid>(*this->equilGrid_, restartValue, restartValues);
+            // The I/O rank holds the collected solution in the leaf order of the
+            // grid it collects on: the global grid, or the output grid of a
+            // Conforming run.
+            Opm::Lgr::extractRestartValueLevelGrids<EquilGrid>(*this->collectGrid_, restartValue, restartValues);
         }
         else {
             Opm::Lgr::extractRestartValueLevelGrids<Grid>(this->grid_, restartValue, restartValues);

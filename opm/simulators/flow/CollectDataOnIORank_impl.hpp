@@ -924,20 +924,102 @@ public:
     }
 };
 
-// Key of a cell in the index maps: its Cartesian index, or its global id in a
-// CpGrid with LGRs, where a refined cell shares its origin's Cartesian index.
+// How the index maps key a cell.  A refined cell shares its origin's
+// Cartesian index, so a CpGrid with LGRs needs another key, one that the
+// ranks and the grid on the I/O rank agree on.
+struct IndexMapKey
+{
+    enum class Type {
+        Cartesian,        //!< the Cartesian index
+        GlobalId,         //!< the global id: the I/O rank holds the global view
+        LevelCartesian,   //!< the level's first key plus the level Cartesian index:
+                          //!< the I/O rank holds a separately refined output grid
+        ParentCartesian   //!< for a refined cell, after the Cartesian keys: its
+                          //!< parent's Cartesian index and its index in the parent
+                          //!< (a leaf refined before load balancing)
+    };
+
+    Type type = Type::Cartesian;
+    std::vector<int> levelStart{};
+    int numCartesian = 0;
+    int childStride = 1;
+};
+
+// Key of a cell in the index maps, see IndexMapKey.
 template <class G, class Element>
-int indexMapKey(const G& grid, const Element& elem, const int cartIdx, const bool useGlobalId)
+int indexMapKey([[maybe_unused]] const G& grid,
+                [[maybe_unused]] const Element& elem,
+                const int cartIdx,
+                [[maybe_unused]] const IndexMapKey& key)
 {
     if constexpr (std::is_same_v<G, Dune::CpGrid>) {
-        if (useGlobalId) {
+        switch (key.type) {
+        case IndexMapKey::Type::GlobalId:
             // A global id is the cell's level index plus the entity counts of
             // the levels before it, so it fits in int as those counts do.
             return static_cast<int>(grid.globalIdSet().id(elem));
+        case IndexMapKey::Type::LevelCartesian:
+            return key.levelStart[elem.level()] + elem.getLevelCartesianIdx();
+        case IndexMapKey::Type::ParentCartesian:
+            if (const int child = elem.getIdxInParentCell(); child >= 0) {
+                return key.numCartesian + cartIdx * key.childStride + child;
+            }
+            break;
+        case IndexMapKey::Type::Cartesian:
+            break;
         }
     }
 
     return cartIdx;
+}
+
+// The key every rank uses for the cells of a distributed grid.  Collective.
+template <class G, class GridView, class CartMapper, class Comm>
+IndexMapKey indexMapKeyOf([[maybe_unused]] const G& grid,
+                          [[maybe_unused]] const GridView& localGridView,
+                          [[maybe_unused]] const CartMapper& cartMapper,
+                          [[maybe_unused]] const Comm& comm)
+{
+    auto key = IndexMapKey{};
+    if constexpr (std::is_same_v<G, Dune::CpGrid>) {
+        bool separateOutputGrid = false;
+        bool flatRefinedLeaf = false;
+        if constexpr (requires { grid.lgrBackend(); grid.leafHasParentCellIndices(); }) {
+            // The Conforming backend writes from an output grid of its own.
+            using Backend = std::remove_cvref_t<decltype(grid.lgrBackend())>;
+            separateOutputGrid = grid.lgrBackend() == Backend::Conforming;
+            flatRefinedLeaf = (grid.maxLevel() == 0) && grid.leafHasParentCellIndices();
+        }
+        if (separateOutputGrid && (grid.maxLevel() > 0)) {
+            key.type = IndexMapKey::Type::LevelCartesian;
+            // A rank that holds no cell of an LGR may see its level empty, so
+            // agree on the size of each level.
+            auto size = std::vector<int>(grid.maxLevel() + 1, 0);
+            for (int level = 0; level <= grid.maxLevel(); ++level) {
+                const auto& dims = grid.currentData()[level]->logicalCartesianSize();
+                size[level] = dims[0] * dims[1] * dims[2];
+            }
+            comm.max(size.data(), static_cast<int>(size.size()));
+            key.levelStart.assign(1, 0);
+            for (int level = 0; level < grid.maxLevel(); ++level) {
+                key.levelStart.push_back(key.levelStart.back() + size[level]);
+            }
+        }
+        else if (separateOutputGrid && flatRefinedLeaf) {
+            key.type = IndexMapKey::Type::ParentCartesian;
+            const auto& dims = cartMapper.cartesianDimensions();
+            key.numCartesian = dims[0] * dims[1] * dims[2];
+            int maxChild = 0;
+            for (const auto& elem : elements(localGridView, Dune::Partitions::interior)) {
+                maxChild = std::max(maxChild, elem.getIdxInParentCell());
+            }
+            key.childStride = comm.max(maxChild) + 1;
+        }
+        else if (grid.maxLevel() > 0) {
+            key.type = IndexMapKey::Type::GlobalId;
+        }
+    }
+    return key;
 }
 
 template <class Grid, class EquilGrid, class GridView>
@@ -959,10 +1041,11 @@ CollectDataOnIORank(const Grid& grid, const EquilGrid* equilGrid,
 
     const CollectiveCommunication& comm = grid.comm();
 
-    // Runs with LGRs key cells by global id.  They do not restart, so they
-    // skip the level-0 restart map localIdxToGlobalIdx_.
-    const bool useGlobalId = std::is_same_v<Grid, Dune::CpGrid> && (grid.maxLevel() > 0);
-    const bool buildRestartMap = !useGlobalId;
+    // Runs with LGRs key cells by another key than their Cartesian index.
+    // They do not restart, so they skip the level-0 restart map
+    // localIdxToGlobalIdx_.
+    const auto key = indexMapKeyOf(grid, localGridView, cartMapper, comm);
+    const bool buildRestartMap = key.type == IndexMapKey::Type::Cartesian;
 
     {
         std::set<int> send, recv;
@@ -1008,7 +1091,7 @@ CollectDataOnIORank(const Grid& grid, const EquilGrid* equilGrid,
             for (const auto& elem : elements(equilGrid->leafGridView())) {
                 int elemIdx = equilElemMapper.index(elem);
                 int cartElemIdx = equilCartMapper->cartesianIndex(elemIdx);
-                globalCartesianIndex_[elemIdx] = indexMapKey(*equilGrid, elem, cartElemIdx, useGlobalId);
+                globalCartesianIndex_[elemIdx] = indexMapKey(*equilGrid, elem, cartElemIdx, key);
             }
 
             for (int i = 0; i < comm.size(); ++i) {
@@ -1052,7 +1135,7 @@ CollectDataOnIORank(const Grid& grid, const EquilGrid* equilGrid,
         // A mapping for the whole grid (including the ghosts) is needed for restarts
         for (const auto& elem : elements(localGridView, Dune::Partitions::interior)) {
             int elemIdx = elemMapper.index(elem);
-            distributedCartesianIndex[elemIdx] = indexMapKey(grid, elem, cartMapper.cartesianIndex(elemIdx), useGlobalId);
+            distributedCartesianIndex[elemIdx] = indexMapKey(grid, elem, cartMapper.cartesianIndex(elemIdx), key);
 
             // only store interior element for collection
             assert(elem.partitionType() == Dune::InteriorEntity);
