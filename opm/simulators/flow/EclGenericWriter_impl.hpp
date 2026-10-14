@@ -1038,10 +1038,18 @@ exportNncStructure_(const std::vector<std::unordered_map<int,int>>& levelCartToL
                 const double* gathered = this->findGatheredTrans_(key);
                 const int leaf1 = leafIndex(c1);
                 const int leaf2 = leafIndex(c2);
-                if (this->gatheredLgrTrans_.has_value() ? (gathered != nullptr) : ((leaf1 >= 0) && (leaf2 >= 0))) {
-                    trans = (gathered != nullptr)
-                        ? *gathered
-                        : this->globalTrans().transmissibility(leaf1, leaf2);
+                // The output grid of a parallel Conforming run is processed without
+                // the numerical aquifers' connections; keep the deck value for those.
+                const bool ownOutputGrid = this->collectGrid_ != this->equilGrid_;
+                const auto leafTrans = (gathered != nullptr)
+                    ? std::optional<double>{*gathered}
+                    : (((leaf1 < 0) || (leaf2 < 0)) ? std::nullopt
+                       : ownOutputGrid ? std::optional<double>{this->globalTrans().findTransmissibility(leaf1, leaf2)}
+                       : std::optional<double>{this->globalTrans().transmissibility(leaf1, leaf2)});
+                if ((this->gatheredLgrTrans_.has_value() ? (gathered != nullptr) : ((leaf1 >= 0) && (leaf2 >= 0)))
+                    && leafTrans.has_value())
+                {
+                    trans = *leafTrans;
 
                     if (! generatedNnc.empty()) {
                         for (const auto& generated : generatedNnc) {
