@@ -506,6 +506,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_istlsolver_quasiimpes.cpp
   tests/test_keyword_validator.cpp
   tests/test_LevelZeroRanks.cpp
+  tests/test_lgr_aquifer_host.cpp
   tests/test_lgr_cell_index.cpp
   tests/test_lgr_compdat_host.cpp
   tests/test_LgrBlockData.cpp
@@ -743,6 +744,7 @@ list (APPEND TEST_DATA_FILES
   tests/GROUP_HIGHER_CONSTRAINTS.DATA
   tests/GROUP_HIGHER_CONSTRAINTS_NETWORK.DATA
   tests/INJECTION_TOPUP_PHASE_VALIDATION.DATA
+  tests/LGR_AQUIFER_HOST.DATA
   tests/LGR_CELL_INDEX.DATA
   tests/LGR_COMPDAT_HOST.DATA
   tests/GLIFT1.DATA

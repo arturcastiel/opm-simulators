@@ -26,16 +26,15 @@
 
 #include <opm/grid/CpGrid.hpp>
 
-#include <opm/input/eclipse/EclipseState/Aquifer/Aquancon.hpp>
-#include <opm/input/eclipse/EclipseState/Grid/FaceDir.hpp>
+#include <opm/common/OpmLog/OpmLog.hpp>
 
-#include <dune/grid/common/rangegenerators.hh>
+#include <opm/input/eclipse/EclipseState/Aquifer/Aquancon.hpp>
+#include <opm/input/eclipse/EclipseState/Grid/LgrCollection.hpp>
+
+#include <fmt/format.h>
 
 #include <algorithm>
-#include <map>
-#include <set>
-#include <type_traits>
-#include <unordered_map>
+#include <array>
 #include <vector>
 
 namespace Opm {
@@ -72,72 +71,55 @@ private:
     const Dune::CpGrid& grid_;
 };
 
-/// Aquifer connections as the leaf grid has them.
-struct LeafAquiferConnections
-{
-    std::vector<Aquancon::AquancCell> connections;
-    std::vector<int> leafCell;           //!< -1: found by the connection's global index
-    std::vector<std::size_t> origin;     //!< index of the deck connection
-};
-
-/// A connection on a refined host, which the deck can only name by the host, is shared
-/// among the host's children with a boundary face on that side, by face area.
+/// \brief The connections of an analytical aquifer that reach a simulation cell.
+///
+/// AQUANCON names a cell by its level-zero index.  When a CARFIN box refines
+/// that cell, the LGR cells take its place and the cell is not part of the
+/// simulation grid: the connection is ignored, with a warning for each one.
+/// Decided from the deck alone, so every rank keeps the same connections.
 template<class Simulator>
-LeafAquiferConnections
-aquiferConnectionsOnLeaf(const std::vector<Aquancon::AquancCell>& connections,
-                         const Simulator& simulator)
+std::vector<Aquancon::AquancCell>
+aquiferConnectionsOutsideLgrs(const std::vector<Aquancon::AquancCell>& connections,
+                              const Simulator& simulator,
+                              const int aquiferID)
 {
-    auto out = LeafAquiferConnections{};
     const auto& vanguard = simulator.vanguard();
-    const auto& gridView = vanguard.gridView();
-    using Element = typename std::remove_cvref_t<decltype(gridView)>::template Codim<0>::Entity;
+    const auto& lgrs = vanguard.eclState().getLgrs();
+    if (lgrs.size() == 0) {
+        return connections;
+    }
 
-    auto children = std::unordered_map<std::size_t, std::vector<std::pair<int, Element>>>{};
-    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(vanguard.grid())>, Dune::CpGrid>) {
-        if (vanguard.grid().maxLevel() > 0) {
-            const auto& mapper = simulator.model().dofMapper();
-            for (const auto& elem : elements(gridView, Dune::Partitions::interior)) {
-                if (elem.level() > 0) {
-                    const auto idx = static_cast<int>(mapper.index(elem));
-                    children[vanguard.cartesianIndex(idx)].emplace_back(idx, elem);
-                }
-            }
+    const auto& dims = vanguard.cartesianDimensions();
+    const bool report = vanguard.grid().comm().rank() == 0;
+
+    auto kept = std::vector<Aquancon::AquancCell>{};
+    kept.reserve(connections.size());
+    for (const auto& conn : connections) {
+        const auto cell = static_cast<int>(conn.global_index);
+        const auto ijk = std::array{cell % dims[0],
+                                    (cell / dims[0]) % dims[1],
+                                    cell / (dims[0] * dims[1])};
+        bool refined = false;
+        for (std::size_t l = 0; (l < lgrs.size()) && !refined; ++l) {
+            // A nested box lies inside its parent's box.
+            const auto& box = lgrs.getLgr(l);
+            refined = (box.PARENT_NAME() == "GLOBAL")
+                && (box.I1() <= ijk[0]) && (ijk[0] <= box.I2())
+                && (box.J1() <= ijk[1]) && (ijk[1] <= box.J2())
+                && (box.K1() <= ijk[2]) && (ijk[2] <= box.K2());
+        }
+        if (! refined) {
+            kept.push_back(conn);
+        }
+        else if (report) {
+            OpmLog::warning(fmt::format("Aquifer {}: the connection to cell ({},{},{}) is "
+                                        "ignored. A CARFIN box refines that cell, so it is "
+                                        "not part of the simulation grid.",
+                                        aquiferID, ijk[0] + 1, ijk[1] + 1, ijk[2] + 1));
         }
     }
 
-    for (std::size_t c = 0; c < connections.size(); ++c) {
-        const auto& conn = connections[c];
-        const auto host = children.find(conn.global_index);
-        auto area = std::map<int, double>{};
-        auto total = 0.0;
-        if ((host != children.end()) && (vanguard.compressedIndex(conn.global_index) < 0)) {
-            for (const auto& [idx, elem] : host->second) {
-                for (const auto& is : intersections(gridView, elem)) {
-                    if (is.boundary() &&
-                        (FaceDir::FromIntersectionIndex(is.indexInInside()) == conn.face_dir)) {
-                        area[idx] += is.geometry().volume();
-                        total += is.geometry().volume();
-                    }
-                }
-            }
-        }
-        if (total > 0.0) {
-            for (const auto& [idx, a] : area) {
-                auto child = conn;
-                child.influx_coeff *= a / total;
-                child.effective_facearea *= a / total;
-                out.connections.push_back(child);
-                out.leafCell.push_back(idx);
-                out.origin.push_back(c);
-            }
-        }
-        else {
-            out.connections.push_back(conn);
-            out.leafCell.push_back(-1);
-            out.origin.push_back(c);
-        }
-    }
-    return out;
+    return kept;
 }
 
 } // namespace Opm
