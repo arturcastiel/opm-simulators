@@ -216,13 +216,14 @@ public:
             // CpGrid name->level map is replicated on every rank (unlike the
             // root-only EclipseState input grid).
             lgrNameToLevel = simulator.vanguard().grid().getLgrNameToLevel();
+            const auto mapper = Dune::MultipleCodimMultipleGeomTypeMapper<GridView>
+                { simulator.gridView(), Dune::mcmgElementLayout() };
             for (const auto& element : elements(simulator.gridView())) {
-                const int level = element.level();
-                if (level > 0 && element.partitionType() == Dune::InteriorEntity) {
-                    const int levelCompressed = element.getLevelElem().index();
-                    const int levelCart = simulator.vanguard()
-                                              .levelCartesianIndexMapper()
-                                              .cartesianIndex(levelCompressed, level);
+                if (element.partitionType() != Dune::InteriorEntity) {
+                    continue;
+                }
+                const auto [level, levelCart] = this->lgrCellOf_(element, mapper.index(element));
+                if (level > 0) {
                     ownedLgrCells.emplace(level, levelCart);
                 }
             }
@@ -239,7 +240,7 @@ public:
         // slot and warn (the warning is also recorded in the .DBG file);
         // cells inside an LGR are addressed with the LB* keyword form.
         if constexpr (std::is_same_v<Grid, Dune::CpGrid>) {
-            if (simulator.vanguard().grid().maxLevel() > 0) {
+            if ((simulator.vanguard().grid().maxLevel() > 0) || this->flatRefinedLeaf_()) {
                 const auto& lgrs = simulator.vanguard().eclState().getLgrs();
                 // The input grid exists on rank 0 only.
                 const auto& dims = simulator.vanguard().cartesianDimensions();
@@ -484,10 +485,12 @@ public:
         // lookup off the LGR-cell path and vice versa; non-LGR runs
         // never enter the LGR branch.
         const auto& element = elemCtx.element();
-        const int   level   = element.level();
 
         for (unsigned dofIdx = 0; dofIdx < elemCtx.numPrimaryDof(/*timeIdx=*/0); ++dofIdx) {
             const auto globalDofIdx = elemCtx.globalSpaceIndex(dofIdx, /*timeIdx=*/0);
+            // A grid refined before load balancing keeps its LGR cells on level
+            // zero; the vanguard finds their LGR from their place in the parent.
+            const auto [level, lgrLevelCart] = this->lgrCellOf_(element, globalDofIdx);
 
             const std::vector<typename BlockExtractor::Exec>* be_extractors  = nullptr;
             const std::vector<typename BlockExtractor::Exec>* bee_extractors = nullptr;
@@ -516,11 +519,7 @@ public:
                 if (level_it != this->lgrBlockExtractors_.end() &&
                     element.partitionType() == Dune::InteriorEntity)
                 {
-                    const int levelCompressed = element.getLevelElem().index();
-                    const int levelCart       = elemCtx.simulator().vanguard()
-                                                    .levelCartesianIndexMapper()
-                                                    .cartesianIndex(levelCompressed, level);
-                    const auto cell_it = level_it->second.find(levelCart);
+                    const auto cell_it = level_it->second.find(lgrLevelCart);
                     if (cell_it != level_it->second.end()) {
                         lgr_extractors = &cell_it->second;
                     }
@@ -987,6 +986,37 @@ private:
         }
     }
 
+    // Whether the grid was refined before load balancing and is distributed
+    // as a flat leaf, whose LGR cells have no level grids.
+    bool flatRefinedLeaf_() const
+    {
+        if constexpr (requires { this->simulator_.vanguard().flatRefinedLeaf(); }) {
+            return this->simulator_.vanguard().flatRefinedLeaf();
+        }
+        return false;
+    }
+
+    // The LGR level and LGR-local Cartesian index of a leaf cell, or level 0
+    // for a cell outside the LGRs.
+    template <class Element>
+    std::pair<int,int> lgrCellOf_([[maybe_unused]] const Element& element,
+                                  [[maybe_unused]] const unsigned elemIdx) const
+    {
+        if constexpr (std::is_same_v<Grid, Dune::CpGrid>) {
+            const auto& vanguard = this->simulator_.vanguard();
+            if constexpr (requires { vanguard.flatLgrCell(0); }) {
+                if (vanguard.flatRefinedLeaf()) {
+                    return vanguard.flatLgrCell(static_cast<int>(elemIdx));
+                }
+            }
+            if (const int level = element.level(); level > 0) {
+                return {level, vanguard.levelCartesianIndexMapper()
+                                   .cartesianIndex(element.getLevelElem().index(), level)};
+            }
+        }
+        return {0, -1};
+    }
+
     // A B* vector naming a cell inside a CARFIN box reads zero for the whole run:
     // the coarse cell is not on the leaf grid, so nothing ever writes its slot,
     // and the refined cells that took its place are reachable only through the
@@ -994,7 +1024,8 @@ private:
     void warnBlockDataInsideLgr_()
     {
         if constexpr (std::is_same_v<Grid, Dune::CpGrid>) {
-            if (this->simulator_.vanguard().grid().maxLevel() == 0) {
+            const bool flat = this->flatRefinedLeaf_();
+            if ((this->simulator_.vanguard().grid().maxLevel() == 0) && !flat) {
                 return;
             }
 
@@ -1004,7 +1035,7 @@ private:
             const auto mapper = Dune::MultipleCodimMultipleGeomTypeMapper<GridView>
                 { gv, Dune::mcmgElementLayout() };
             for (const auto& elem : elements(gv)) {
-                if (elem.level() == 0) {
+                if ((elem.level() == 0) && !(flat && (elem.getIdxInParentCell() >= 0))) {
                     onLeaf.insert(vanguard.cartesianIndex(mapper.index(elem)));
                 }
             }

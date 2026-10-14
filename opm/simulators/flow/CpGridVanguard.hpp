@@ -332,6 +332,41 @@ public:
     //! Cached flat refine-before maps: level -> (LGR-local Cartesian -> leaf idx).
     mutable std::optional<std::vector<std::unordered_map<std::size_t,int>>> flatLgrMappers_;
 
+    //! \brief Whether the grid was refined before load balancing and is
+    //!        distributed as a flat leaf: refined cells without level grids.
+    bool flatRefinedLeaf() const
+    {
+        if constexpr (requires { this->grid().leafHasParentCellIndices(); }) {
+            return (this->grid().maxLevel() == 0) && this->grid().leafHasParentCellIndices();
+        }
+        return false;
+    }
+
+    //! \brief The LGR level and LGR-local Cartesian index of an interior cell
+    //!        of a flat refined leaf, or (0, -1) for any other cell.
+    std::pair<int,int> flatLgrCell(const int leafIdx) const
+    {
+        if (!flatLgrCells_.has_value()) {
+            if (!flatLgrMappers_.has_value()) {
+                this->buildFlatLgrMappers_();
+            }
+            auto cells = std::unordered_map<int, std::pair<int,int>>{};
+            const auto& mappers = flatLgrMappers_.value();
+            for (std::size_t level = 0; level < mappers.size(); ++level) {
+                for (const auto& [lgrCart, leaf] : mappers[level]) {
+                    cells.emplace(leaf, std::make_pair(static_cast<int>(level),
+                                                       static_cast<int>(lgrCart)));
+                }
+            }
+            flatLgrCells_.emplace(std::move(cells));
+        }
+        const auto it = flatLgrCells_->find(leafIdx);
+        return (it != flatLgrCells_->end()) ? it->second : std::make_pair(0, -1);
+    }
+
+    //! Cached inverse of flatLgrMappers_: leaf idx -> (level, LGR-local Cartesian).
+    mutable std::optional<std::unordered_map<int, std::pair<int,int>>> flatLgrCells_;
+
     /*!
      * Checking consistency of simulator
      */
