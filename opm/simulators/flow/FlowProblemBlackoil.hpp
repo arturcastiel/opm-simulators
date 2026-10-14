@@ -448,14 +448,7 @@ public:
         // also updated.
         this->eclWriter().mutableOutputModule().invalidateLocalData();
 
-        // The summary of a parallel run with LGRs is not collected on the I/O rank yet.
-        const auto& grid = this->simulator().vanguard().gridView().grid();
-
-        using GridType = std::remove_cv_t<std::remove_reference_t<decltype(grid)>>;
-        constexpr bool isCpGrid = std::is_same_v<GridType, Dune::CpGrid>;
-        if (!isCpGrid || (grid.maxLevel() == 0) || (grid.comm().size() == 1)) {
-            this->eclWriter_->evalSummaryState(!this->episodeWillBeOver());
-        }
+        this->eclWriter_->evalSummaryState(!this->episodeWillBeOver());
 
         {
             OPM_TIMEBLOCK(applyActions);
@@ -565,16 +558,8 @@ public:
         // the initial solution.
         this->thresholdPressures_.finishInit();
 
-        // The in-place values of a parallel run with LGRs are not collected on the
-        // I/O rank yet.
-        const auto& grid = this->simulator().vanguard().gridView().grid();
-
-        using GridType = std::remove_cv_t<std::remove_reference_t<decltype(grid)>>;
-        constexpr bool isCpGrid = std::is_same_v<GridType, Dune::CpGrid>;
-        if (!isCpGrid || (grid.maxLevel() == 0) || (grid.comm().size() == 1)) {
-            if (this->simulator().episodeIndex() == 0) {
-                eclWriter_->writeInitialFIPReport();
-            }
+        if (this->simulator().episodeIndex() == 0) {
+            eclWriter_->writeInitialFIPReport();
         }
     }
 
