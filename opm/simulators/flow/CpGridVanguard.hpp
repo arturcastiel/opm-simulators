@@ -572,6 +572,8 @@ public:
         // Check if input file contains Lgrs. Add them, if any.
         // In a parallel run, this adds the LGRs on the distributed simulation grid.
         if (const auto& lgrs = this->eclState().getLgrs(); lgrs.size() > 0) {
+            this->refuseCompdatInRefinedCells_(lgrs);
+
             // With the experimental refine-before-redistribute option the LGRs
             // are already added in loadBalance() for a parallel run (before the
             // grid is distributed), so don't add them again here. The check is on
@@ -628,13 +630,64 @@ public:
                     this->grid_->syncDistributedGlobalCellIds();
                 }
             }
+        }
+    }
 
-            // A COMPDAT connection inside a box moves into the innermost LGR covering it
-            // by index, with its connection factor rescaled; the same on every rank.
-            if (this->grid_->lgrBackend() == Opm::Refinement::Backend::Conforming) {
-                this->schedule().refineConnectionsIntoLgrs(lgrs);
+    /*!
+     * \brief Stop if a level-zero connection names a cell that an LGR refines.
+     *
+     * The LGR cells take the place of the refined cell, so that cell is no
+     * cell of the simulation grid.  A well is completed in an LGR with
+     * WELSPECL and COMPDATL, in the LGR's own indices.  Decided from the
+     * deck alone, so every rank stops together.
+     */
+    template <class Lgrs>
+    void refuseCompdatInRefinedCells_(const Lgrs& lgrs) const
+    {
+        const auto inBox = [&lgrs](const std::array<int,3>& ijk)
+        {
+            for (std::size_t l = 0; l < lgrs.size(); ++l) {
+                // A nested box lies inside its parent's box.
+                const auto& box = lgrs.getLgr(l);
+                if ((box.PARENT_NAME() == "GLOBAL")
+                    && (box.I1() <= ijk[0]) && (ijk[0] <= box.I2())
+                    && (box.J1() <= ijk[1]) && (ijk[1] <= box.J2())
+                    && (box.K1() <= ijk[2]) && (ijk[2] <= box.K2()))
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        auto found = std::set<std::pair<std::string, std::array<int,3>>>{};
+        const auto& schedule = this->schedule();
+        for (std::size_t step = 0; step < schedule.size(); ++step) {
+            const auto& state = schedule[step];
+            for (const auto& wname : state.well_order()) {
+                for (const auto& conn : state.wells.get(wname).getConnections()) {
+                    const auto ijk = std::array{conn.getI(), conn.getJ(), conn.getK()};
+                    if ((conn.get_lgr_level() == 0) && inBox(ijk)) {
+                        found.emplace(wname, ijk);
+                    }
+                }
             }
         }
+        if (found.empty()) {
+            return;
+        }
+
+        auto cells = std::string{};
+        for (const auto& [wname, ijk] : found) {
+            cells += fmt::format("\n  well {} in cell ({},{},{})",
+                                 wname, ijk[0] + 1, ijk[1] + 1, ijk[2] + 1);
+        }
+        OPM_THROW(std::invalid_argument,
+                  fmt::format("{} connection(s) name a cell that a CARFIN box refines, "
+                              "and that cell is not part of the simulation grid:{}\n"
+                              "Complete the well in the LGR with WELSPECL and COMPDATL, "
+                              "in the LGR's own cell indices.",
+                              found.size(), cells));
     }
 
     unsigned int gridEquilIdxToGridIdx(unsigned int elemIndex) const {
