@@ -27,7 +27,8 @@
  * LGR_CELL_INDEX.DATA refines cell (1,1,1) of a 3x1x1 grid into 2x1x1.  The
  * refined cells come first in the leaf grid, so cells (2,1,1) and (3,1,1) have
  * other leaf indices than level-0 indices.  compressedIndexForInterior(), which
- * places well connections and aquifer cells, must return their leaf cell.
+ * places well connections and aquifer cells, must return their leaf cell.  The
+ * refined cell (1,1,1) itself is no leaf cell and maps to no cell.
  */
 
 #define BOOST_TEST_MODULE LgrCellIndex
@@ -65,4 +66,20 @@ BOOST_AUTO_TEST_CASE(UnrefinedCellsMapToTheirLeafCell)
             }
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(RefinedCellMapsToNoCell)
+{
+    using TypeTag = Opm::Properties::TTag::TestTypeTag;
+
+    auto simulator = Opm::initSimulator<TypeTag>("LGR_CELL_INDEX.DATA", "test_lgr_cell_index",
+                                                 /*threads_per_process=*/1, "low");
+    const auto& vanguard = simulator->vanguard();
+
+    BOOST_REQUIRE_EQUAL(vanguard.grid().maxLevel(), 1);
+
+    // Both LGR cells report the Cartesian index of cell (1,1,1).  Neither
+    // stands for that cell, so the lookup finds none.
+    BOOST_CHECK_EQUAL(vanguard.compressedIndexForInterior(0), -1);
+    BOOST_CHECK_EQUAL(vanguard.compressedIndex(0), -1);
 }

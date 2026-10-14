@@ -338,12 +338,20 @@ protected:
         std::size_t num_cells = asImp_().grid().leafGridView().size(0);
         is_interior_.resize(num_cells);
 
+        // Runs again after LGRs are added, which renumbers the leaf cells.
+        cartesianToCompressed_.clear();
+
         ElementMapper elemMapper(this->gridView(), Dune::mcmgElementLayout());
         for (const auto& element : elements(this->gridView()))
         {
             const auto elemIdx = elemMapper.index(element);
-            unsigned cartesianCellIdx = cartesianIndex(elemIdx);
-            cartesianToCompressed_[cartesianCellIdx] = elemIdx;
+            // The refined cells of an LGR share their parent cell's Cartesian
+            // index.  The map holds unrefined cells only, so the index of a
+            // refined parent cell maps to no cell.
+            if (!element.hasFather()) {
+                unsigned cartesianCellIdx = cartesianIndex(elemIdx);
+                cartesianToCompressed_[cartesianCellIdx] = elemIdx;
+            }
             if (element.partitionType() == Dune::InteriorEntity)
             {
                 is_interior_[elemIdx] = 1;
