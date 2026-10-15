@@ -138,17 +138,18 @@ FlowGenericVanguard::FlowGenericVanguard(SimulationModelParams&& params)
     ownersFirst_ = Parameters::Get<Parameters::OwnerCellsFirst>();
     edgeConformal_ = Parameters::Get<Parameters::EdgeConformal>();
     edgeConformalMergeTolerance_ = Parameters::Get<Parameters::EdgeConformalMergeTolerance>();
-    lgrBackend_ = Parameters::Get<Parameters::LgrBackend>();
-    if (lgrBackend_ != "trilinear" && lgrBackend_ != "conforming") {
-        throw std::invalid_argument(fmt::format("Unknown value for --lgr-backend: '{}'. "
-                                                "Accepted values are 'trilinear' and 'conforming'.",
-                                                lgrBackend_));
+    lgrRefinementType_ = Parameters::Get<Parameters::LgrRefinementType>();
+    if (lgrRefinementType_ != 1 && lgrRefinementType_ != 2) {
+        throw std::invalid_argument(fmt::format("Unknown value for --lgr-refinement-type: {}. "
+                                                "Accepted values are 1 (the current refinement) "
+                                                "and 2 (the conforming refinement).",
+                                                lgrRefinementType_));
     }
-    // Conforming refines before load balancing unless told otherwise: refining
-    // each box on its owning rank needs every box to fit on one rank.
+    // The conforming refinement refines before load balancing unless told otherwise:
+    // refining each box on its owning rank needs every box to fit on one rank.
     refineBeforeRedistribute_ = Parameters::IsSet<Parameters::RefineBeforeRedistribute>()
         ? Parameters::Get<Parameters::RefineBeforeRedistribute>()
-        : lgrBackend_ == "conforming";
+        : lgrRefinementType_ == 2;
 
 #if HAVE_MPI
     numOverlap_ = Parameters::Get<Parameters::NumOverlap>();
@@ -498,15 +499,15 @@ void FlowGenericVanguard::registerParameters_()
          "are merged into their neighbours like pinched cells, and corner points "
          "closer than this along a pillar become one node. The PINCH threshold "
          "is used when it is larger.");
-    Parameters::Register<Parameters::LgrBackend>
-        ("How LGRs are refined: 'trilinear' (default) or 'conforming', the "
-         "corner-point builder that also handles graded boxes, block MINPV, "
+    Parameters::Register<Parameters::LgrRefinementType>
+        ("How LGRs are refined: 1 (default), the current refinement, or 2, the "
+         "conforming refinement, which also handles graded boxes, block MINPV, "
          "faults and LGRPILLR.");
     Parameters::Register<Parameters::RefineBeforeRedistribute>
-        ("With --lgr-backend=conforming: refine the grid before load "
+        ("With --lgr-refinement-type=2: refine the grid before load "
          "balancing and distribute the refined cells, balanced by refined "
          "cell count, instead of refining each box on its owning rank. "
-         "Unset, it is true with --lgr-backend=conforming and false otherwise.");
+         "Unset, it is true with --lgr-refinement-type=2 and false otherwise.");
 
 #if HAVE_MPI
     Parameters::Register<Parameters::AddCorners>

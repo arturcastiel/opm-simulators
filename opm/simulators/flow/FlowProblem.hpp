@@ -1438,13 +1438,13 @@ protected:
             // connections that no rank records, below.
             if (simulator.vanguard().grid().comm().size() > 1) {
                 bool wholeGridTransNeeded = simulator.vanguard().grid().comm().rank() == 0;
-                // A parallel Conforming LGR run writes from the I/O rank's refined
-                // reference grid; the transmissibility must live there too.  The
-                // backend decides, not that grid: it exists on the I/O rank only,
-                // and the gathered path below is collective.
+                // A parallel LGR run with the conforming refinement writes from the I/O
+                // rank's refined reference grid; the transmissibility must live there
+                // too.  The refinement type decides, not that grid: it exists on the
+                // I/O rank only, and the gathered path below is collective.
                 bool refinedOutputGrid = false;
                 if constexpr (requires { simulator.vanguard().eclOutputTransmissibility(); }) {
-                    refinedOutputGrid = simulator.vanguard().lgrBackend() == "conforming";
+                    refinedOutputGrid = simulator.vanguard().lgrRefinementType() == 2;
                     if (refinedOutputGrid) {
                         if (wholeGridTransNeeded) {
                             eclWriter.setTransmissibilities(&simulator.vanguard().eclOutputTransmissibility());

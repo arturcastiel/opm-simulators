@@ -586,7 +586,7 @@ public:
                 if (this->refineBeforeRedistribute()) {
                     if (!conforming) {
                         OPM_THROW(std::invalid_argument, "--refine-before-redistribute needs "
-                                  "--lgr-backend=conforming.");
+                                  "--lgr-refinement-type=2.");
                     }
                     // Refine the global grid before load balancing: the partitioner then
                     // weights each coarse cell by its refined cells and distributes the
@@ -670,7 +670,7 @@ public:
                 for (std::size_t l = 0; l < lgrs.size(); ++l) {
                     if (!lgrs.getLgr(l).blockValues().empty()) {
                         OPM_THROW(std::invalid_argument, "LGR '" + lgrs.getLgr(l).NAME() + "' sets its own "
-                                  "property values; only --lgr-backend=conforming applies them.");
+                                  "property values; only --lgr-refinement-type=2 applies them.");
                     }
                 }
             }
@@ -799,7 +799,7 @@ public:
 protected:
     void createGrids_()
     {
-        this->doCreateGrids_(this->edgeConformal(), this->lgrBackend() == "conforming", this->eclState(),
+        this->doCreateGrids_(this->edgeConformal(), this->lgrRefinementType() == 2, this->eclState(),
                              this->edgeConformalMergeTolerance());
     }
 
