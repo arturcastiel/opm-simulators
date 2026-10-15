@@ -29,9 +29,11 @@
 #include <dune/grid/common/partitionset.hh>
 #include <dune/common/version.hh>
 
+#include <opm/common/ErrorMacros.hpp>
 #include <opm/common/TimingMacros.hpp>
 #include <opm/common/utility/ActiveGridCells.hpp>
 
+#include <opm/grid/cpgrid/CpGridData.hpp>
 #include <opm/grid/cpgrid/GridHelpers.hpp>
 #include <opm/grid/cpgrid/LevelCartesianIndexMapper.hpp>
 
@@ -61,14 +63,105 @@
 #include <cassert>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <fmt/format.h>
+
+namespace {
+
+// The trilinear refinement refuses a box cell that it cannot refine: a cell with
+// a non-neighbour connection, a numerical aquifer cell or a cell connected to one,
+// a cell with more than six faces (a cell on a fault) and a cell whose corners are
+// not eight distinct points.  In a parallel run each process refines its own
+// cells, so only the process holding such a cell stopped, while the others went
+// on into the next collective step of the refinement and the run died in MPI.
+// Look for such cells in every box first, on every process, and stop them all
+// together, naming the first one.
+void refuseCellsTheTrilinearRefinementCannotRefine(const Opm::LgrCollection& lgrs,
+                                                   const Dune::CpGrid& grid)
+{
+    const auto& dims = grid.logicalCartesianSize();
+    const auto& globalCell = grid.globalCell();
+    const auto inBox = [&lgrs, &dims](const int cartIdx) -> int {
+        const int i = cartIdx % dims[0];
+        const int j = (cartIdx / dims[0]) % dims[1];
+        const int k = cartIdx / (dims[0] * dims[1]);
+        for (std::size_t l = 0; l < lgrs.size(); ++l) {
+            const auto& lgr = lgrs.getLgr(l);
+            if (lgr.PARENT_NAME() == "GLOBAL" &&
+                i >= lgr.I1() && i <= lgr.I2() && j >= lgr.J1() && j <= lgr.J2() &&
+                k >= lgr.K1() && k <= lgr.K2()) {
+                return static_cast<int>(l);
+            }
+        }
+        return -1;
+    };
+
+    // The first refused cell as 4 * Cartesian index + reason, the smallest over all processes.
+    enum Reason { Nnc = 0, Aquifer = 1, Faces = 2, Corners = 3 };
+    const auto& data = *grid.currentData().back();
+    long long first = std::numeric_limits<long long>::max();
+    const auto refuse = [&first, &globalCell](const int cell, const Reason reason) {
+        first = std::min(first, 4LL * globalCell[cell] + reason);
+    };
+    for (int cell = 0; cell < grid.size(0); ++cell) {
+        if (inBox(globalCell[cell]) < 0) {
+            continue;
+        }
+        if (data.hasNNCs({cell})) {
+            refuse(cell, Nnc);
+        }
+        if (grid.numCellFaces(cell) > 6) {
+            refuse(cell, Faces);
+        }
+        const auto& corners = data.cellToPoint(cell);
+        if (std::set<int>(corners.begin(), corners.end()).size() != corners.size()) {
+            refuse(cell, Corners);
+        }
+    }
+    for (const int aquiferCell : grid.currentData().front()->sortedNumAquiferCells()) {
+        if (inBox(globalCell[aquiferCell]) >= 0) {
+            refuse(aquiferCell, Aquifer);
+        }
+        for (int f = 0; f < grid.numCellFaces(aquiferCell); ++f) {
+            const int face = grid.cellFace(aquiferCell, f);
+            for (const int side : { 0, 1 }) {
+                const int other = grid.faceCell(face, side);
+                if (other >= 0 && other != aquiferCell && inBox(globalCell[other]) >= 0) {
+                    refuse(other, Aquifer);
+                }
+            }
+        }
+    }
+
+    first = grid.comm().min(first);
+    if (first == std::numeric_limits<long long>::max()) {
+        return;
+    }
+    const int cart = static_cast<int>(first / 4);
+    const auto reason = static_cast<Reason>(first % 4);
+    const int i = cart % dims[0];
+    const int j = (cart / dims[0]) % dims[1];
+    const int k = cart / (dims[0] * dims[1]);
+    const std::string what = reason == Nnc ? "which has a non-neighbour connection"
+        : reason == Aquifer ? "which is a numerical aquifer cell or is connected to one"
+        : reason == Faces ? "which has more than six faces, as a cell on a fault has"
+        : "whose corners are not eight distinct points";
+    OPM_THROW(std::invalid_argument,
+              fmt::format("LGR '{}' refines cell ({},{},{}), {}. The trilinear refinement "
+                          "cannot refine such a cell{}.",
+                          lgrs.getLgr(inBox(cart)).NAME(), i + 1, j + 1, k + 1, what,
+                          reason == Faces ? "; --lgr-backend=conforming can" : ""));
+}
+
+} // Anonymous namespace
 
 namespace Opm {
 
@@ -721,6 +814,10 @@ void GenericCpGridVanguard<ElementMapper,GridView,Scalar>::addLgrsUpdateLeafView
                                                                                  const int lgrsSize,
                                                                                  Dune::CpGrid& grid)
 {
+    if (grid.lgrBackend() == Opm::Refinement::Backend::Trilinear) {
+        refuseCellsTheTrilinearRefinementCannotRefine(lgrCollection, grid);
+    }
+
     std::vector<std::array<int,3>> cells_per_dim_vec;
     std::vector<std::array<int,3>> startIJK_vec;
     std::vector<std::array<int,3>> endIJK_vec;
