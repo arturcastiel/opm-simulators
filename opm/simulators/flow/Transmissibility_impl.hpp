@@ -507,6 +507,15 @@ update(bool global, const TransUpdateQuantities update_quantities,
 
             unsigned boundaryIsIdx = 0;
             for (const auto& intersection : intersections(gridView_, elem)) {
+                // A face that is none of the six faces of its cell is an NNC.
+                // In a parallel run with LGRs, an NNC whose other cell this process
+                // does not hold can show up as a boundary intersection: it has no
+                // boundary transmissibility, so treat it as a process boundary.
+                if (intersection.boundary() && intersection.indexInInside() < 0) {
+                    ++boundaryIsIdx;
+                    continue;
+                }
+
                 // deal with grid boundaries
                 if (intersection.boundary()) {
                     // compute the transmissibilty for the boundary intersection
