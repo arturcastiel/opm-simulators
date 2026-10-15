@@ -593,7 +593,24 @@ public:
                     // leaf, splitting boxes as needed, so no cell groups here.
                     OpmLog::info("\nRefine-before-redistribute: adding LGRs to "
                                  "the grid before load balancing");
-                    this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *this->grid_);
+                    // Only the rank holding the grid refines; a refusal there must stop
+                    // the ranks that would wait for it in the load balancing below.  The
+                    // communicator is taken first: a build that stops halfway leaves the
+                    // grid's new levels on a self-communicator.
+                    const auto gridComm = this->grid_->comm();
+                    std::exception_ptr refineError;
+                    try {
+                        this->addLgrsUpdateLeafView(lgrs, lgrs.size(), *this->grid_);
+                    }
+                    catch (...) {
+                        refineError = std::current_exception();
+                    }
+                    if (gridComm.max(refineError ? 1 : 0) > 0) {
+                        if (refineError) {
+                            std::rethrow_exception(refineError);
+                        }
+                        OPM_THROW(std::runtime_error, "Adding the LGRs failed on another rank.");
+                    }
                     this->updateGridView_();
                     partMethod = Dune::PartitionMethod::zoltanGoG;
                 } else if (applyLgrPartitionCellGroups_(lgrs, lgrOverlap)) {
