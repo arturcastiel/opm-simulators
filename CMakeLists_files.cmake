@@ -514,6 +514,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_keyword_validator.cpp
   tests/test_LgrBlockData.cpp
   tests/test_LgrTransIndex.cpp
+  tests/test_lgr_block_data.cpp
   tests/test_lgr_nnc_ranks.cpp
   tests/test_lgr_refusal_ranks.cpp
   tests/test_lgr_sealed_fault_ranks.cpp
