@@ -516,6 +516,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_LgrTransIndex.cpp
   tests/test_lgr_nnc_ranks.cpp
   tests/test_lgr_refusal_ranks.cpp
+  tests/test_lgr_sealed_fault_ranks.cpp
   tests/test_lgr_unrefined_ranks.cpp
   tests/test_lgr_well_ranks.cpp
   tests/test_lgr_zero_cells.cpp
