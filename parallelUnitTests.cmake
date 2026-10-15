@@ -96,6 +96,17 @@ foreach(NPROC 2 3 4)
   )
 endforeach()
 
+foreach(NPROC 2 4)
+  opm_add_test(test_lgr_well_ranks_np${NPROC}
+    EXE_TARGET
+      test_lgr_well_ranks
+    DRIVER_ARGS
+      -n ${NPROC}
+    PROCESSORS
+      ${NPROC}
+  )
+endforeach()
+
 foreach(NPROC 2 3 4)
   opm_add_test(test_parallel_wbp_sourcevalues_np${NPROC}
     EXE_TARGET
