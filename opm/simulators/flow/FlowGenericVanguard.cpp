@@ -500,9 +500,9 @@ void FlowGenericVanguard::registerParameters_()
          "closer than this along a pillar become one node. The PINCH threshold "
          "is used when it is larger.");
     Parameters::Register<Parameters::LgrRefinementType>
-        ("How LGRs are refined: 1 (default), the current refinement, or 2, the "
-         "conforming refinement, which also handles graded boxes, block MINPV, "
-         "faults and LGRPILLR.");
+        ("How LGRs are refined: 2 (default), the conforming refinement, which "
+         "also handles graded boxes, block MINPV, faults and LGRPILLR, or 1, the "
+         "current refinement.");
     Parameters::Register<Parameters::RefineBeforeRedistribute>
         ("With --lgr-refinement-type=2: refine the grid before load "
          "balancing and distribute the refined cells, balanced by refined "

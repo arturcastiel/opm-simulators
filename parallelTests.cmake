@@ -1155,7 +1155,35 @@ add_test_compare_parallel_simulation(
     --parsing-strictness=low
 )
 
-# The full run of the same deck: serial and parallel SMRY, UNRST, INIT and EGRID.
+# The same with refinement type 1, which writes the INIT from the gathered
+# records above (the default, 2, writes it from a refined copy of the grid on
+# the I/O rank).
+add_test_compare_parallel_simulation(
+  CASENAME
+    spe1case1_carfin_refinement1
+  FILENAME
+    SPE1CASE1_CARFIN
+  POSTFIX
+    refinement1
+  SIMULATOR
+    flow
+  DEV_SIMULATOR
+    flow_blackoil
+  DIR
+    lgr
+  ABS_TOL
+    1e-3
+  REL_TOL
+    1e-5
+  COMPARE_MODE
+    init
+  TEST_ARGS
+    --parsing-strictness=low
+    --lgr-refinement-type=1
+)
+
+# The full run of the same deck: serial and parallel SMRY, UNRST, INIT and EGRID,
+# with refinement type 1.
 add_test_compare_parallel_simulation(
   CASENAME
     spe1case1_carfin_full
@@ -1173,6 +1201,35 @@ add_test_compare_parallel_simulation(
     ${rel_tol_parallel}
   TEST_ARGS
     --parsing-strictness=low
+    --lgr-refinement-type=1
+)
+
+# The full run with the default refinement, 2. It refines before load balancing, so
+# the run is decomposed differently; the solver is tightened as for the other
+# parallel comparisons above, which keeps the default tolerances.
+add_test_compare_parallel_simulation(
+  CASENAME
+    spe1case1_carfin_full_refinement2
+  FILENAME
+    SPE1CASE1_CARFIN
+  POSTFIX
+    refinement2
+  SIMULATOR
+    flow
+  DEV_SIMULATOR
+    flow_blackoil
+  DIR
+    lgr
+  ABS_TOL
+    ${abs_tol_parallel}
+  REL_TOL
+    ${rel_tol_parallel}
+  TEST_ARGS
+    --parsing-strictness=low
+    --linear-solver-reduction=1e-7
+    --tolerance-cnv=5e-6
+    --tolerance-mb=1e-8
+    --tolerance-wells=1e-7
 )
 
 opm_set_test_driver(${PROJECT_SOURCE_DIR}/tests/run-comparison.sh "")

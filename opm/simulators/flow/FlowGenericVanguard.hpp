@@ -82,7 +82,7 @@ struct EdgeConformal { static constexpr bool value = false; };
 struct EdgeConformalMergeTolerance { static constexpr double value = 0.0; };
 
 /// How a CpGrid's LGRs are refined: 1 the current refinement, 2 the conforming refinement.
-struct LgrRefinementType { static constexpr int value = 1; };
+struct LgrRefinementType { static constexpr int value = 2; };
 /// Refinement type 2 only: refine before load balancing and distribute the refined leaf.
 /// Unset, it follows the refinement type: on with 2, off with 1.
 struct RefineBeforeRedistribute { static constexpr bool value = false; };
