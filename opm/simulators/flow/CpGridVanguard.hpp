@@ -682,8 +682,10 @@ public:
             // implementation's way to make refined cell ids globally
             // consistent. The rank-interior refinement builder (the fork)
             // produces deterministic per-rank refinement and does not use it.
+            // When MINPV or ACTNUM leaves no LGR an active cell, nothing was refined
+            // and there are no refined cell ids to synchronise.
             if (this->grid_->lgrBackend() == Opm::Refinement::Backend::Trilinear) {
-                if (this->grid_->comm().size()>1) {
+                if (this->grid_->comm().size()>1 && this->grid_->comm().max(this->grid_->maxLevel()) > 0) {
                     // Add LGRs and update the leaf grid view in the global (undistributed) simulation grid.
                     // Purpose: To enable synchronization of cell ids in 'serial mode',
                     //          we rely on the "parent-to-children" cell id mapping.
