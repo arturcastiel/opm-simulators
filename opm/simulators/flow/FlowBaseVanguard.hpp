@@ -218,6 +218,21 @@ public:
     }
 
     /*!
+     * \brief Compressed index of cell (i,j,k) of an LGR.
+     *
+     * \param [in] lgr_tag LGR name.
+     * \param [in] lgr_ijk Cartesian index triplet of the cell in the LGR.
+     *
+     * \return Compressed index of the cell, or -1 if the cell is inactive
+     *   or not in the interior of this process.
+     */
+    virtual int compressedIndexForInteriorLGRCell([[maybe_unused]] const std::string&       lgr_tag,
+                                                  [[maybe_unused]] const std::array<int,3>& lgr_ijk) const
+    {
+        throw std::runtime_error("compressedIndexForInteriorLGRCell not implemented");
+    }
+
+    /*!
      * \brief Extract Cartesian index triplet (i,j,k) of an active cell.
      *
      * \param [in] cellIdx Active cell index.

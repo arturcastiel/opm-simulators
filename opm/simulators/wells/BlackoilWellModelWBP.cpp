@@ -23,15 +23,14 @@
 #include <config.h>
 #include <opm/simulators/wells/BlackoilWellModelWBP.hpp>
 
-#include <opm/common/OpmLog/OpmLog.hpp>
 #include <opm/input/eclipse/EclipseState/EclipseState.hpp>
+#include <opm/input/eclipse/EclipseState/Grid/LgrCollection.hpp>
 #include <opm/input/eclipse/Schedule/Well/WellConnections.hpp>
 
 #include <opm/material/fluidsystems/BlackOilDefaultFluidSystemIndices.hpp>
 
 #include <opm/simulators/wells/BlackoilWellModelGeneric.hpp>
 
-#include <algorithm>
 #include <cassert>
 
 namespace Opm {
@@ -49,6 +48,27 @@ initializeSources(typename ParallelWBPCalculation<Scalar>::GlobalToLocal index,
                   typename ParallelWBPCalculation<Scalar>::Evaluator eval)
 {
     this->wbpCalculationService_.localCellIndex(index).evalCellSource(eval);
+
+    // The cells of each LGR, for the wells in that LGR.
+    const auto& lgrs = well_model_.eclipseState().getLgrs();
+    for (auto lgrIdx = 0*lgrs.size(); lgrIdx < lgrs.size(); ++lgrIdx) {
+        const auto& lgr = lgrs.getLgr(lgrIdx);
+        const auto lgrNumber = static_cast<int>(lgrIdx + 1);
+        const auto& lgrDims = this->lgrDims_
+            .try_emplace(lgrNumber, static_cast<std::size_t>(lgr.NX()),
+                         static_cast<std::size_t>(lgr.NY()),
+                         static_cast<std::size_t>(lgr.NZ()))
+            .first->second;
+
+        this->lgrWbpCalculationServices_
+            .try_emplace(lgrNumber, lgrDims, well_model_.comm())
+            .first->second
+            .localCellIndex([this, lgrDims, tag = lgr.NAME()](const std::size_t lgrCellIdx)
+            {
+                return well_model_.compressedIndexForInteriorLGRCell(tag, lgrDims.getIJK(lgrCellIdx));
+            })
+            .evalCellSource(eval);
+    }
 }
 
 template<typename Scalar, typename IndexTraits>
@@ -79,21 +99,14 @@ initializeWBPCalculationService()
 
     auto wellID = std::size_t{0};
     for (const auto& well : well_model_.eclWells()) {
-        // The calculator takes connections as level-zero cells, which an
-        // LGR connection's index is not; LGR-aware WBP is not implemented.
-        const auto& conns = well.getConnections();
-        if (std::any_of(conns.begin(), conns.end(),
-                        [](const auto& c) { return c.get_lgr_level() > 0; })) {
-            this->wbpCalcMap_[wellID].skipped_ = true;
-            if (this->warnedLgrWells_.insert(well.name()).second) {
-                OpmLog::warning("Well " + well.name() + " is completed in an LGR; "
-                                "its block average pressures (WBP, WBP4, WBP5, WBP9) "
-                                "are not computed and report zero.");
-            }
-            ++wellID;
-            continue;
-        }
-        this->wbpCalcMap_[wellID].wbpCalcIdx_ = this->wbpCalculationService_
+        auto& wbpCalc = this->wbpCalcMap_[wellID];
+
+        // All connections of a well are in the same grid.
+        const auto& connections = well.getConnections();
+        wbpCalc.grid_ = connections.empty()
+            ? 0 : connections.begin()->get_lgr_level();
+
+        wbpCalc.wbpCalcIdx_ = this->wbpCalculationService(wbpCalc.grid_)
             .createCalculator(well,
                               well_model_.parallelWellInfo(wellID),
                               well_model_.connectionIndexMap(wellID).local(),
@@ -103,6 +116,9 @@ initializeWBPCalculationService()
     }
 
     this->wbpCalculationService_.defineCommunication();
+    for (auto& lgrService : this->lgrWbpCalculationServices_) {
+        lgrService.second.defineCommunication();
+    }
 }
 
 template<typename Scalar, typename IndexTraits>
@@ -116,12 +132,12 @@ computeWellBlockAveragePressures(const Scalar gravity) const
     using Output = data::WellBlockAvgPress::Quantity;
 
     this->wbpCalculationService_.collectDynamicValues();
+    for (auto& lgrService : this->lgrWbpCalculationServices_) {
+        lgrService.second.collectDynamicValues();
+    }
 
     const auto numWells = well_model_.numLocalWells();
     for (auto wellID = 0*numWells; wellID < numWells; ++wellID) {
-        if (this->wbpCalcMap_[wellID].skipped_) {
-            continue;
-        }
         const auto calcIdx = this->wbpCalcMap_[wellID].wbpCalcIdx_;
         const auto& well = well_model_.eclWells()[wellID];
 
@@ -131,13 +147,13 @@ computeWellBlockAveragePressures(const Scalar gravity) const
             continue;
         }
 
-        this->wbpCalculationService_
-            .inferBlockAveragePressures(calcIdx, well.pavg(),
-                                        gravity,
-                                        well.getWPaveRefDepth());
+        auto& service = this->wbpCalculationService(this->wbpCalcMap_[wellID].grid_);
 
-        const auto& result = this->wbpCalculationService_
-            .averagePressures(calcIdx);
+        service.inferBlockAveragePressures(calcIdx, well.pavg(),
+                                           gravity,
+                                           well.getWPaveRefDepth());
+
+        const auto& result = service.averagePressures(calcIdx);
 
         auto& reported = wbpResult.values[well.name()];
 
@@ -148,6 +164,16 @@ computeWellBlockAveragePressures(const Scalar gravity) const
     }
 
     return wbpResult;
+}
+
+template<typename Scalar, typename IndexTraits>
+ParallelWBPCalculation<Scalar>&
+BlackoilWellModelWBP<Scalar, IndexTraits>::
+wbpCalculationService(const int grid) const
+{
+    return (grid == 0)
+        ? this->wbpCalculationService_
+        : this->lgrWbpCalculationServices_.at(grid);
 }
 
 template<typename Scalar, typename IndexTraits>

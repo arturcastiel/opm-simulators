@@ -551,6 +551,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_tpsa_preconditioner.cpp
   tests/test_tpsa_primaryvariables.cpp
   tests/test_vfpproperties.cpp
+  tests/test_wbp_lgr.cpp
   tests/test_SystemCprwPressureStage.cpp
   tests/test_MswCprWellDiagonal.cpp
   tests/test_WellMatrixMerger.cpp

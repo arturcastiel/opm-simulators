@@ -23,15 +23,16 @@
 #ifndef OPM_BLACKOILWELLMODEL_WBP_HEADER_INCLUDED
 #define OPM_BLACKOILWELLMODEL_WBP_HEADER_INCLUDED
 
+#include <opm/input/eclipse/EclipseState/Grid/GridDims.hpp>
+
 #include <opm/output/data/Wells.hpp>
 
 #include <opm/simulators/wells/ParallelWBPCalculation.hpp>
 #include <opm/simulators/wells/WellInterfaceGeneric.hpp>
 
 #include <cstddef>
+#include <map>
 #include <optional>
-#include <set>
-#include <string>
 #include <vector>
 
 namespace Opm {
@@ -59,19 +60,30 @@ public:
     computeWellBlockAveragePressures(const Scalar gravity) const;
 
 private:
+    /// Calculation service of the grid a well's connections are in: the
+    /// global grid (0) or an LGR (its number in the deck, from 1).
+    ParallelWBPCalculation<Scalar>& wbpCalculationService(int grid) const;
+
     BlackoilWellModelGeneric<Scalar, IndexTraits>& well_model_;
     mutable ParallelWBPCalculation<Scalar> wbpCalculationService_;
+
+    /// Dimensions of each LGR, keyed by the LGR's number in the deck.  The
+    /// LGR's calculation service refers to them.
+    std::map<int, GridDims> lgrDims_{};
+
+    /// One calculation service per LGR, keyed by the LGR's number in the
+    /// deck.  It identifies the LGR's cells by their Cartesian index in the
+    /// LGR, so that a connection's neighbours are those of the LGR.
+    mutable std::map<int, ParallelWBPCalculation<Scalar>> lgrWbpCalculationServices_{};
 
     struct WBPCalcID
     {
         std::optional<typename std::vector<WellInterfaceGeneric<Scalar, IndexTraits>*>::size_type> openWellIdx_{};
         std::size_t wbpCalcIdx_{};
-        // Completed in an LGR: no calculator, WBP not reported.
-        bool skipped_{false};
+        int grid_{0};
     };
 
     std::vector<WBPCalcID> wbpCalcMap_{};
-    std::set<std::string> warnedLgrWells_{};
 };
 
 

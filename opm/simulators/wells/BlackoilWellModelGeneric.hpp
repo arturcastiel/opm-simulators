@@ -48,6 +48,7 @@
 #include <opm/simulators/wells/WGState.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <map>
@@ -127,6 +128,12 @@ public:
                                               [[maybe_unused]] const Connection& conn) const
     {
         throw std::runtime_error("compressedIndexForInteriorLGR not implemented");
+    }
+
+    virtual int compressedIndexForInteriorLGRCell([[maybe_unused]] const std::string&       lgr_tag,
+                                                  [[maybe_unused]] const std::array<int,3>& lgr_ijk) const
+    {
+        throw std::runtime_error("compressedIndexForInteriorLGRCell not implemented");
     }
 
     int numLocalWells() const;

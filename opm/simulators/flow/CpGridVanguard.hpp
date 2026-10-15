@@ -192,7 +192,8 @@ public:
         // ask whether the grid knows the question at all.
         if constexpr (requires { this->grid().leafHasParentCellIndices(); }) {
             if (this->grid().maxLevel() == 0 && this->grid().leafHasParentCellIndices()) {
-                return this->compressedIndexForInteriorLGRFlat_(lgr_tag, lgr_level, conn);
+                return this->compressedIndexForInteriorLGRFlat_(lgr_tag, lgr_level,
+                                                                {conn.getI(), conn.getJ(), conn.getK()});
             }
         }
 
@@ -234,6 +235,32 @@ public:
         return static_cast<int>(it->second);
     }
 
+    int compressedIndexForInteriorLGRCell(const std::string&       lgr_tag,
+                                          const std::array<int,3>& lgr_ijk) const override
+    {
+        const int lgr_level = this->grid().getLgrNameToLevel().at(lgr_tag);
+
+        if constexpr (requires { this->grid().leafHasParentCellIndices(); }) {
+            if (this->grid().maxLevel() == 0 && this->grid().leafHasParentCellIndices()) {
+                return this->compressedIndexForInteriorLGRFlat_(lgr_tag, lgr_level, lgr_ijk);
+            }
+        }
+
+        if (! this->lgrInteriorCells_.has_value()) {
+            // Interior leaf cells by grid level and Cartesian index in the level.
+            auto& cells = this->lgrInteriorCells_.emplace(this->grid().maxLevel() + 1);
+            for (const auto& element : elements(this->gridView(), Dune::Partitions::interior)) {
+                cells[element.level()].emplace(element.getLevelCartesianIdx(), element.index());
+            }
+        }
+
+        const auto& lgr_dim = this->grid().currentData()[lgr_level]->logicalCartesianSize();
+        const auto& cells = this->lgrInteriorCells_.value()[lgr_level];
+        const auto cell = cells.find((lgr_ijk[2]*lgr_dim[1] + lgr_ijk[1])*lgr_dim[0] + lgr_ijk[0]);
+
+        return (cell == cells.end()) ? -1 : cell->second;
+    }
+
     //! \brief Resolve an LGR-completed connection on the flat refine-before leaf.
     //!
     //! On the refine-before-redistribute path the distributed grid is the flat
@@ -246,7 +273,7 @@ public:
     //! level-0 coarse cell).
     int compressedIndexForInteriorLGRFlat_(const std::string& lgr_tag,
                                            int lgr_level,
-                                           const Connection& conn) const
+                                           const std::array<int,3>& lgr_ijk) const
     {
         if (!flatLgrMappers_.has_value()) {
             this->buildFlatLgrMappers_();
@@ -255,13 +282,13 @@ public:
         if (lgr_level < 0 || static_cast<std::size_t>(lgr_level) >= mappers.size()) {
             return -1;
         }
-        // LGR-local Cartesian index of the connection, using the LGR's refined
+        // LGR-local Cartesian index of the cell, using the LGR's refined
         // dimensions straight from the (static) CARFIN definition.
         const auto& carfin = this->eclState().getLgrs().getLgr(lgr_tag);
         const int nx = carfin.NX();
         const int ny = carfin.NY();
         const auto lgr_cartesian_index = static_cast<std::size_t>(
-            (conn.getK()*nx*ny) + (conn.getJ()*nx) + conn.getI());
+            (lgr_ijk[2]*nx*ny) + (lgr_ijk[1]*nx) + lgr_ijk[0]);
 
         const auto& mapper = mappers[lgr_level];
         const auto it = mapper.find(lgr_cartesian_index);
@@ -331,6 +358,9 @@ public:
 
     //! Cached flat refine-before maps: level -> (LGR-local Cartesian -> leaf idx).
     mutable std::optional<std::vector<std::unordered_map<std::size_t,int>>> flatLgrMappers_;
+
+    //! Interior leaf cells by grid level and Cartesian index in the level.
+    mutable std::optional<std::vector<std::unordered_map<int,int>>> lgrInteriorCells_;
 
     //! \brief Whether the grid was refined before load balancing and is
     //!        distributed as a flat leaf: refined cells without level grids.
