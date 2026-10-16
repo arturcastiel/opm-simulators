@@ -124,12 +124,12 @@ BOOST_AUTO_TEST_CASE(TransmissibilitiesOfAnLgrAndAnNnc)
     }
     comm.barrier();
 
-    // The trilinear refinement is flow's default.
+    // The trilinear refinement.
     std::unique_ptr<Opm::GetPropType<TypeTag, Opm::Properties::Simulator>> simulator;
     BOOST_CHECK_NO_THROW(simulator = Opm::initSimulator<TypeTag>(deck_file.c_str(),
                                                                  "test_lgr_nnc_ranks",
                                                                  /*threads_per_process=*/1,
-                                                                 "low"));
+                                                                 "low", { "--lgr-backend=trilinear" }));
     BOOST_REQUIRE(simulator);
 
     // The process that holds both cells of the NNC as interior or overlap cells

@@ -108,8 +108,7 @@ END
 )";
 }
 
-// Every process stops: the deck cannot be refined by the trilinear refinement,
-// which is flow's default.
+// Every process stops: the deck cannot be refined by the trilinear refinement.
 void checkEveryProcessStops(const std::string& deckText)
 {
     using TypeTag = Opm::Properties::TTag::TestTypeTag;
@@ -125,7 +124,8 @@ void checkEveryProcessStops(const std::string& deckText)
     comm.barrier();
 
     BOOST_CHECK_THROW(Opm::initSimulator<TypeTag>(deck_file.c_str(), "test_lgr_refusal_ranks",
-                                                  /*threads_per_process=*/1, "low"),
+                                                  /*threads_per_process=*/1, "low",
+                                                  { "--lgr-backend=trilinear" }),
                       std::exception);
 
     comm.barrier();
