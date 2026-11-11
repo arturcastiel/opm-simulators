@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <mutex>
 #include <vector>
 
@@ -46,7 +47,9 @@ namespace Opm {
  * under one lock, and each entity of a chunk without a lock: the work per
  * entity can vary a lot, as for a flash in two-phase cells and none in
  * single-phase ones, so the entities are distributed dynamically, but one
- * lock per entity costs more than the work on many entities.
+ * lock per entity costs more than the work on many entities. The chunks
+ * shrink towards the end of the loop, to a quarter of the remaining entities'
+ * share of a thread, so that the threads finish together.
  *
  * ATTENTION: This class must be instantiated in a sequential context!
  */
@@ -56,7 +59,7 @@ class ThreadedEntityIterator
     using Entity = typename GridView::template Codim<codim>::Entity;
     using EntityIterator = typename GridView::template Codim<codim>::Iterator;
 public:
-    //! The number of consecutive entities a thread takes at a time.
+    //! The largest number of consecutive entities a thread takes at a time.
     static constexpr unsigned defaultChunkSize = 16;
 
     explicit ThreadedEntityIterator(const GridView& gridView,
@@ -65,6 +68,7 @@ public:
         , sequentialEnd_(gridView.template end<codim>())
         , chunkSize_(std::max(chunkSize, 1u))
         , chunks_(maxThreads_(), Chunk{sequentialEnd_, 0})
+        , remaining_(static_cast<std::size_t>(gridView.size(codim)))
     {}
 
     ThreadedEntityIterator(const ThreadedEntityIterator& other) = default;
@@ -112,11 +116,15 @@ private:
     {
         std::lock_guard<std::mutex> guard(mutex_);
         chunk.it = sequentialIt_;
+        const std::size_t share = remaining_ / (4 * chunks_.size());
+        const unsigned size = static_cast<unsigned>(
+            std::clamp<std::size_t>(share, 1, chunkSize_));
         unsigned taken = 0;
-        while (taken < chunkSize_ && sequentialIt_ != sequentialEnd_) {
+        while (taken < size && sequentialIt_ != sequentialEnd_) {
             ++sequentialIt_;
             ++taken;
         }
+        remaining_ -= std::min<std::size_t>(taken, remaining_);
         chunk.remaining = taken > 0 ? taken - 1 : 0;
         return chunk.it;
     }
@@ -143,6 +151,9 @@ private:
     EntityIterator sequentialEnd_;
     unsigned chunkSize_;
     std::vector<Chunk> chunks_;
+    // The number of entities not yet taken, as far as the grid view's size
+    // tells; it only sets the chunk size.
+    std::size_t remaining_;
     std::atomic<bool> finished_{false};
 
     std::mutex mutex_;
