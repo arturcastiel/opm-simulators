@@ -302,14 +302,9 @@ public:
                                             materialParams, fluidState_);
         Valgrind::CheckDefined(relativePermeability_);
 
-        // set the phase viscosity and density
+        // set the phase viscosity and density; the parameter cache already holds
+        // both hydrocarbon phases at their final composition and pressure
         for (unsigned phaseIdx = 0; phaseIdx < numPhases; ++phaseIdx) {
-            if (phaseIdx == static_cast<unsigned int>(FluidSystem::oilPhaseIdx) ||
-                phaseIdx == static_cast<unsigned int>(FluidSystem::gasPhaseIdx))
-            {
-                paramCache.updatePhase(fluidState_, phaseIdx);
-            }
-
             const Evaluation& mu = FluidSystem::viscosity(fluidState_, paramCache, phaseIdx);
 
             fluidState_.setViscosity(phaseIdx, mu);
