@@ -57,6 +57,7 @@
 #include <cstddef>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -196,6 +197,10 @@ public:
             : RestartOutput::Disabled;
         this->compC_.allocate(bufferSize, rstKeywords, restartOutput);
         this->numUnresolvedSaturationPressures_ = 0;
+        if (this->compC_.saturationPressureAllocated()
+            && this->saturationPressureMemo_.size() != bufferSize) {
+            this->saturationPressureMemo_.assign(bufferSize, SaturationPressureMemo{});
+        }
 
         this->doAllocBuffers(bufferSize, reportStepNum, substep, log,
                              forceRestartFieldAllocation,
@@ -840,12 +845,32 @@ private:
         for (int c = 0; c < numComponents; ++c) {
             moleFractions[c] = getValue(fluidState.moleFraction(c));
         }
-        const auto psat = CompositionalContainer<FluidSystem>::cellSaturationPressure(
-            getValue(fluidState.L()),
-            getValue(fluidState.pressure(oilPhaseIdx)),
-            moleFractions,
-            getValue(fluidState.temperature(oilPhaseIdx)),
-            this->eosType_);
+        const Scalar liquidFraction = getValue(fluidState.L());
+        const Scalar temperature = getValue(fluidState.temperature(oilPhaseIdx));
+
+        // The saturation pressure of a single phase depends on its composition
+        // and temperature only: a cell where neither has changed since the last
+        // output, to the last bit, gets the same answer without a new search.
+        // Most of the searches that cost the most are of mixtures that have no
+        // saturation pressure, and do not change between outputs.
+        const bool singlePhase = liquidFraction == Scalar{0} || liquidFraction == Scalar{1};
+        auto& memo = this->saturationPressureMemo_[globalDofIdx];
+        std::optional<Scalar> psat;
+        if (singlePhase && memo.valid && memo.liquidFraction == liquidFraction
+            && memo.temperature == temperature && memo.moleFractions == moleFractions) {
+            psat = memo.saturationPressure;
+        }
+        else {
+            psat = CompositionalContainer<FluidSystem>::cellSaturationPressure(
+                liquidFraction,
+                getValue(fluidState.pressure(oilPhaseIdx)),
+                moleFractions,
+                temperature,
+                this->eosType_);
+            if (singlePhase) {
+                memo = SaturationPressureMemo{moleFractions, temperature, liquidFraction, psat, true};
+            }
+        }
         if (!psat) {
             // A false result means only that no saturation pressure was resolved;
             // it does not distinguish a physically absent boundary from numerical
@@ -859,10 +884,21 @@ private:
         this->compC_.assignSaturationPressure(globalDofIdx, psat.value_or(Scalar{0}));
     }
 
+    // The inputs and the answer of a cell's last saturation pressure search.
+    struct SaturationPressureMemo
+    {
+        std::array<Scalar, numComponents> moleFractions{};
+        Scalar temperature{};
+        Scalar liquidFraction{};
+        std::optional<Scalar> saturationPressure{};
+        bool valid{false};
+    };
+
     const Simulator& simulator_;
     CompositionalContainer<FluidSystem> compC_;
     CompositionalConfig::EOSType eosType_;
     std::size_t numUnresolvedSaturationPressures_{};
+    std::vector<SaturationPressureMemo> saturationPressureMemo_;
     std::vector<typename Extractor::Entry> extractors_;
     typename BlockExtractor::ExecMap blockExtractors_;
 };
