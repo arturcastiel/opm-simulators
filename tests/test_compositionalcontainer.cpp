@@ -178,6 +178,38 @@ BOOST_AUTO_TEST_CASE(CellSaturationPressureSelectsThePhaseAndTheBranch)
     }
 }
 
+BOOST_AUTO_TEST_CASE(CellSaturationPressureStartsFromTheLastAnswer)
+{
+    constexpr double temperature = 373.15;
+    constexpr auto eos = Opm::CompositionalConfig::EOSType::PR;
+    using CompVec = std::array<double, 3>;
+    using Start = Container::SaturationPressureStart;
+
+    // A liquid's bubble point becomes the start of the next search, which
+    // finds the bubble point of a slightly different liquid as the search
+    // from the Wilson estimate does.
+    Start start{};
+    const auto first = Container::cellSaturationPressure(
+        1.0, 150.0e5, CompVec{0.0, 0.5, 0.5}, temperature, eos, start);
+    BOOST_REQUIRE(first.has_value());
+    BOOST_CHECK_EQUAL(start.pressure, *first);
+    BOOST_CHECK(start.bubble);
+
+    const CompVec next{0.0, 0.501, 0.499};
+    const auto started = Container::cellSaturationPressure(1.0, 150.0e5, next, temperature, eos, start);
+    const auto unstarted = Container::cellSaturationPressure(1.0, 150.0e5, next, temperature, eos);
+    BOOST_REQUIRE(started.has_value() && unstarted.has_value());
+    BOOST_CHECK_CLOSE(*started, *unstarted, 1.0e-6);
+    BOOST_CHECK_EQUAL(start.pressure, *started);
+
+    // A two-phase cell leaves the start alone; a failed search clears it.
+    BOOST_CHECK(Container::cellSaturationPressure(0.3, 75.0e5, next, temperature, eos, start));
+    BOOST_CHECK_EQUAL(start.pressure, *started);
+    BOOST_CHECK(!Container::cellSaturationPressure(0.0, 150.0e5, CompVec{0.0, 1.0, 0.0},
+                                                   temperature, eos, start));
+    BOOST_CHECK_EQUAL(start.pressure, 0.0);
+}
+
 BOOST_AUTO_TEST_CASE(RoundOffInTheGasSaturationDoesNotHideTheBubblePoint)
 {
     // Sg = max(1 - So - Sw, 0) leaves a positive round-off residual at Sw = 0.3.
