@@ -40,6 +40,17 @@ struct FlashTwoPhaseMethod { static constexpr auto value = "ssi+newton"; };
 //! The verbosity level of the flash solver
 struct FlashVerbosity { static constexpr int value = 0; };
 
+//! Predict a cell's two-phase flash from its last answer and the sensitivities
+//! of that answer; the flash only checks the prediction
+struct FlashPredictSplit { static constexpr bool value = false; };
+
+//! An accepted prediction takes the remembered sensitivities as its derivatives
+struct FlashReuseDerivatives { static constexpr bool value = false; };
+
+//! Skip the stability test of a single-phase cell whose last test was decisive
+//! and whose state has hardly changed since
+struct FlashPhaseMemory { static constexpr bool value = false; };
+
 } // namespace Opm::Parameters
 
 #endif
