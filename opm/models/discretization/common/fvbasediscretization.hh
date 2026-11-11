@@ -613,20 +613,27 @@ public:
      * relations while updating the intensive quantities. (This may yield a major
      * performance boost depending on how the physical models require.)
      *
-     * \attention If no up-to date intensive quantities are available, or if hints have been
-     *            disabled, this method will return 0.
+     * The hint is the most recent result computed for the entity, also if it is no
+     * longer up to date: when the intensive quantities are recomputed after a change
+     * of the solution, e.g. a Newton update, the hint is the entity's previous result.
+     *
+     * \attention If no intensive quantities have been computed for the entity yet, or if
+     *            hints have been disabled, this method will return 0.
      *
      * \param globalIdx The global space index for the entity where a hint is requested.
      * \param timeIdx The index used by the time discretization.
      */
     const IntensiveQuantities* thermodynamicHint(unsigned globalIdx, unsigned timeIdx) const
     {
-        if (!enableThermodynamicHints_) {
-            return 0;
+        if (!enableThermodynamicHints_ ||
+            !enableIntensiveQuantityCache_ ||
+            timeIdx >= cachedIntensiveQuantityHistorySize_ ||
+            !intensiveQuantityCacheComputed_[timeIdx][globalIdx]) {
+            return nullptr;
         }
 
         // the intensive quantities cache doubles as thermodynamic hint
-        return cachedIntensiveQuantities(globalIdx, timeIdx);
+        return &intensiveQuantityCache_[timeIdx][globalIdx];
     }
 
     /*!
@@ -692,6 +699,7 @@ public:
 
         intensiveQuantityCache_[timeIdx][globalIdx] = intQuants;
         intensiveQuantityCacheUpToDate_[timeIdx][globalIdx] = true;
+        intensiveQuantityCacheComputed_[timeIdx][globalIdx] = true;
     }
 
     /*!
@@ -737,6 +745,9 @@ public:
 
     void invalidateAndUpdateIntensiveQuantities(unsigned timeIdx) const
     {
+        // The invalidated entries keep their data: each one is the thermodynamic hint of
+        // its entity. An element updates only its primary degrees of freedom, so the
+        // thread that reads an entry as a hint is the one that rewrites it afterwards.
         invalidateIntensiveQuantitiesCache(timeIdx);
 
         // exceptions must not escape the parallel block below (that calls
@@ -850,6 +861,7 @@ public:
         for (unsigned timeIdx = 0; timeIdx < intensiveHistorySize - numSlots; ++timeIdx) {
             intensiveQuantityCache_[timeIdx + numSlots] = intensiveQuantityCache_[timeIdx];
             intensiveQuantityCacheUpToDate_[timeIdx + numSlots] = intensiveQuantityCacheUpToDate_[timeIdx];
+            intensiveQuantityCacheComputed_[timeIdx + numSlots] = intensiveQuantityCacheComputed_[timeIdx];
         }
 
         // the cache for the most recent time indices do not need to be invalidated
@@ -1998,10 +2010,12 @@ protected:
             // resize the vectors based on runtime history size
             intensiveQuantityCache_.resize(intensiveHistorySize);
             intensiveQuantityCacheUpToDate_.resize(intensiveHistorySize);
+            intensiveQuantityCacheComputed_.resize(intensiveHistorySize);
 
             for(unsigned timeIdx = 0; timeIdx < intensiveHistorySize; ++timeIdx) {
                 intensiveQuantityCache_[timeIdx].resize(numDof);
                 intensiveQuantityCacheUpToDate_[timeIdx].resize(numDof);
+                intensiveQuantityCacheComputed_[timeIdx].assign(numDof, /*value=*/0);
                 invalidateIntensiveQuantitiesCache(timeIdx);
             }
         }
@@ -2078,6 +2092,10 @@ protected:
 
     // while these are logically bools, concurrent writes to vector<bool> are not thread safe.
     mutable std::vector<std::vector<unsigned char>> intensiveQuantityCacheUpToDate_;
+
+    // whether a cache entry holds a computed result, up to date or not: such an entry
+    // is the entity's thermodynamic hint
+    mutable std::vector<std::vector<unsigned char>> intensiveQuantityCacheComputed_;
 
     std::array<std::unique_ptr<DiscreteFunction>, historySize> solution_;
 
