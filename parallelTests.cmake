@@ -1136,6 +1136,26 @@ add_test_compare_parallel_simulation(
     --lgr-backend=trilinear
 )
 
+# Nested LGR on the refine-before-redistribute path: several nested parents share one level-zero host.
+add_test_compare_parallel_simulation(
+  CASENAME
+    spe1case1_carfin1_nested_contained
+  FILENAME
+    SPE1CASE1_CARFIN1_NESTED_CONTAINED
+  SIMULATOR
+    flow
+  DEV_SIMULATOR
+    flow_blackoil
+  DIR
+    lgr
+  ABS_TOL
+    ${abs_tol_parallel}
+  REL_TOL
+    ${rel_tol_parallel}
+  TEST_ARGS
+    --parsing-strictness=low
+)
+
 opm_set_test_driver(${PROJECT_SOURCE_DIR}/tests/run-comparison.sh "")
 
 add_test_compareSeparateECLFiles(
