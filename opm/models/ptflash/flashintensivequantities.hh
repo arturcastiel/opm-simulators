@@ -51,8 +51,11 @@
 #include <fmt/format.h>
 
 #include <array>
+#include <cmath>
+#include <cstdlib>
 #include <iterator>
 #include <string>
+#include <type_traits>
 
 namespace Opm {
 
@@ -173,6 +176,13 @@ public:
 
         // Get initial K and L from storage initially (if enabled)
         const auto* hint = elemCtx.thermodynamicHint(dofIdx, timeIdx);
+        // invalidateAndUpdateIntensiveQuantities() marks the whole cache out
+        // of date before it updates the cells, so the hint above is empty on
+        // every call from there. The cell's cached entry still holds its last
+        // answer: research switch OPM_FLASH_STALE_HINT=1 takes it as the hint.
+        if (!hint && staleHintsEnabled_()) {
+            hint = staleHint_(elemCtx, dofIdx, timeIdx);
+        }
         if (hint) {
              for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
                  const Evaluation& Ktmp = hint->fluidState().K(compIdx);
@@ -416,6 +426,44 @@ public:
     { return porosity_; }
 
 private:
+    static bool staleHintsEnabled_()
+    {
+        static const bool enabled = [] {
+            const char* value = std::getenv("OPM_FLASH_STALE_HINT");
+            return value != nullptr && std::string(value) == "1";
+        }();
+        return enabled;
+    }
+
+    //! The cell's cached intensive quantities whatever their up-to-date flag,
+    //! if they hold a flash answer: positive finite K and L in [0, 1]. An
+    //! entry that was never computed holds K = 0.
+    static const auto* staleHint_(const ElementContext& elemCtx, unsigned dofIdx, unsigned timeIdx)
+    {
+        const auto& cache = elemCtx.model().intensiveQuantityCache();
+        using Entry = std::remove_cvref_t<decltype(cache[0][0])>;
+        if (timeIdx >= cache.size()) {
+            return static_cast<const Entry*>(nullptr);
+        }
+        const unsigned globalIdx = elemCtx.globalSpaceIndex(dofIdx, timeIdx);
+        if (globalIdx >= cache[timeIdx].size()) {
+            return static_cast<const Entry*>(nullptr);
+        }
+        const Entry& entry = cache[timeIdx][globalIdx];
+        const auto& fs = entry.fluidState();
+        for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
+            const Scalar K = getValue(fs.K(compIdx));
+            if (!(K > 0.0) || !std::isfinite(K)) {
+                return static_cast<const Entry*>(nullptr);
+            }
+        }
+        const Scalar L = getValue(fs.L());
+        if (!(L >= 0.0 && L <= 1.0)) {
+            return static_cast<const Entry*>(nullptr);
+        }
+        return &entry;
+    }
+
     bool hasHydrocarbon_{true};
     DimMatrix intrinsicPerm_;
     FluidState fluidState_;
