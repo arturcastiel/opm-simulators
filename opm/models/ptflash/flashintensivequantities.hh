@@ -134,10 +134,10 @@ public:
         const auto& priVars = elemCtx.primaryVars(dofIdx, timeIdx);
         const auto& problem = elemCtx.problem();
 
-        const Scalar flashTolerance = Parameters::Get<Parameters::FlashTolerance<Scalar>>();
-        const int flashVerbosity = Parameters::Get<Parameters::FlashVerbosity>();
-        const auto ptFlashMethod =
-            ptFlashMethodFromString(Parameters::Get<Parameters::FlashTwoPhaseMethod>());
+        const auto& model = elemCtx.model();
+        const Scalar flashTolerance = model.flashTolerance();
+        const int flashVerbosity = model.flashVerbosity();
+        const PTFlashMethod ptFlashMethod = model.flashTwoPhaseMethod();
         // Extract the overall component mole fractions; the last fraction is dependent.
         ComponentVector z(0.);
         {
