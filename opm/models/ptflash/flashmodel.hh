@@ -262,6 +262,15 @@ public:
         Parameters::Register<Parameters::FlashTwoPhaseMethod>
             ("Method for solving vapor-liquid composition. Available options include: "
              "ssi, newton, ssi+newton");
+        Parameters::Register<Parameters::FlashPredictSplit>
+            ("Predict the two-phase flash of a cell from its last answer and check the "
+             "prediction with one fugacity evaluation");
+        Parameters::Register<Parameters::FlashReuseDerivatives>
+            ("With FlashPredictSplit, an accepted prediction reuses the derivatives of the "
+             "cell's last answer");
+        Parameters::Register<Parameters::FlashPhaseMemory>
+            ("Skip the stability test of a single-phase cell whose last test was decisive "
+             "and whose state has hardly changed since");
 
         Parameters::SetDefault<Parameters::FlashTolerance<Scalar>>(1.e-8);
         Parameters::SetDefault<Parameters::EnableIntensiveQuantityCache>(true);
