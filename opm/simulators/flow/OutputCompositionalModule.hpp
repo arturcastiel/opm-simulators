@@ -861,14 +861,21 @@ private:
             psat = memo.saturationPressure;
         }
         else {
+            // The search starts from the cell's last answer, see
+            // SaturationPressure::Start.
             psat = CompositionalContainer<FluidSystem>::cellSaturationPressure(
                 liquidFraction,
                 getValue(fluidState.pressure(oilPhaseIdx)),
                 moleFractions,
                 temperature,
-                this->eosType_);
+                this->eosType_,
+                memo.start);
             if (singlePhase) {
-                memo = SaturationPressureMemo{moleFractions, temperature, liquidFraction, psat, true};
+                memo.moleFractions = moleFractions;
+                memo.temperature = temperature;
+                memo.liquidFraction = liquidFraction;
+                memo.saturationPressure = psat;
+                memo.valid = true;
             }
         }
         if (!psat) {
@@ -892,6 +899,7 @@ private:
         Scalar liquidFraction{};
         std::optional<Scalar> saturationPressure{};
         bool valid{false};
+        typename CompositionalContainer<FluidSystem>::SaturationPressureStart start{};
     };
 
     const Simulator& simulator_;

@@ -96,6 +96,26 @@ public:
                            const Scalar temperature,
                            const CompositionalConfig::EOSType eosType);
 
+    /// The answer of a cell's last bubble- or dew-point search: the start of
+    /// its next one. A pressure of zero means none.
+    struct SaturationPressureStart
+    {
+        Scalar pressure{};
+        std::array<Scalar, numComponents> incipient{};
+        bool bubble{};
+    };
+
+    /// cellSaturationPressure(), with the search of a single phase started
+    /// from \p start where it was of the same kind (bubble or dew point).
+    /// \p start receives this search's answer, or none if it failed.
+    [[nodiscard]] static std::optional<Scalar>
+    cellSaturationPressure(const Scalar liquidFraction,
+                           const Scalar oilPressure,
+                           const std::array<Scalar, numComponents>& moleFractions,
+                           const Scalar temperature,
+                           const CompositionalConfig::EOSType eosType,
+                           SaturationPressureStart& start);
+
     void assignVaporFraction(const unsigned globalDofIdx,
                              const Scalar vmf);
 

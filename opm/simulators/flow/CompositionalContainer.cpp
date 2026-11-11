@@ -249,6 +249,20 @@ cellSaturationPressure(const Scalar liquidFraction,
                        const Scalar temperature,
                        const CompositionalConfig::EOSType eosType) -> std::optional<Scalar>
 {
+    SaturationPressureStart none{};
+    return cellSaturationPressure(liquidFraction, oilPressure, moleFractions,
+                                  temperature, eosType, none);
+}
+
+template<class FluidSystem>
+auto CompositionalContainer<FluidSystem>::
+cellSaturationPressure(const Scalar liquidFraction,
+                       const Scalar oilPressure,
+                       const std::array<Scalar, numComponents>& moleFractions,
+                       const Scalar temperature,
+                       const CompositionalConfig::EOSType eosType,
+                       SaturationPressureStart& start) -> std::optional<Scalar>
+{
     // Compare against the flash's exact single-phase labels. Round-off can put
     // a two-phase Rachford-Rice result slightly outside the interval [0, 1].
     const bool liquidOnly = liquidFraction == Scalar{1};
@@ -263,13 +277,26 @@ cellSaturationPressure(const Scalar liquidFraction,
         using Solver = SaturationPressure<Scalar, FluidSystem>;
         typename Solver::CompVec incipient{};
         Scalar psat{};
-        const bool found = liquidOnly
-            ? Solver::bubblePressure(moleFractions, temperature, eosType, psat, incipient)
-            : Solver::dewPressure(moleFractions, temperature, eosType, psat, incipient);
+        bool found = false;
+        if (start.pressure > Scalar{0} && start.bubble == liquidOnly) {
+            const typename Solver::Start solverStart{start.pressure, start.incipient};
+            found = liquidOnly
+                ? Solver::bubblePressure(moleFractions, temperature, eosType, solverStart,
+                                         psat, incipient)
+                : Solver::dewPressure(moleFractions, temperature, eosType, solverStart,
+                                      psat, incipient);
+        }
+        else {
+            found = liquidOnly
+                ? Solver::bubblePressure(moleFractions, temperature, eosType, psat, incipient)
+                : Solver::dewPressure(moleFractions, temperature, eosType, psat, incipient);
+        }
         if (found) {
+            start = SaturationPressureStart{psat, incipient, liquidOnly};
             return psat;
         }
     }
+    start = SaturationPressureStart{};
     return std::nullopt;
 }
 
