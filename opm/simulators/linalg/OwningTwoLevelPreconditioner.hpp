@@ -192,13 +192,22 @@ private:
     void updateImpl(const Comm*)
     {
         // Parallel case.
-        twolevel_method_.updatePreconditioner(finesmoother_, coarseSolverPolicy_);
+        twolevel_method_.updatePreconditioner(finesmoother_, coarseSolverPolicy_, updateCoarseSolver());
     }
 
     void updateImpl(const Dune::Amg::SequentialInformation*)
     {
         // Serial case.
-        twolevel_method_.updatePreconditioner(finesmoother_, coarseSolverPolicy_);
+        twolevel_method_.updatePreconditioner(finesmoother_, coarseSolverPolicy_, updateCoarseSolver());
+    }
+
+    // The coarse level solver (the pressure AMG) is rebuilt on every
+    // coarse_update_interval-th update only (default 1: every update).
+    bool updateCoarseSolver()
+    {
+        const int interval = prm_.get<int>("coarse_update_interval", 1);
+        ++updateCount_;
+        return interval <= 1 || (updateCount_ % interval) == 0;
     }
 
     const OperatorType& linear_operator_;
@@ -211,6 +220,7 @@ private:
     TwoLevelMethod twolevel_method_;
     Opm::PropertyTree prm_;
     Communication dummy_comm_;
+    int updateCount_ = 0;
 };
 
 } // namespace Dune
