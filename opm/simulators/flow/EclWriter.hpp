@@ -411,7 +411,7 @@ public:
                          /*forceRestartFieldAllocation=*/false);
 
 #ifdef _OPENMP
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, 16)
 #endif
         for (int dofIdx = 0; dofIdx < num_interior; ++dofIdx) {
             const auto& intQuants = simulator_.model().intensiveQuantities(dofIdx, /*timeIdx=*/0);
@@ -896,8 +896,10 @@ private:
         {
             OPM_TIMEBLOCK(prepareFluidInPlace);
 
+            // Dynamically: a compositional cell's saturation pressure search
+            // can cost a thousand times another's, and such cells cluster.
 #ifdef _OPENMP
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, 16)
 #endif
             for (int dofIdx = 0; dofIdx < num_interior; ++dofIdx) {
                 const auto& intQuants = simulator_.model().intensiveQuantities(dofIdx, /*timeIdx=*/0);

@@ -212,6 +212,20 @@ struct TestSimulator
     const TestVanguard& vanguard() const { return vanguard_; }
 };
 
+// The flash parameters, which the intensive quantities take from the model.
+struct TestFlashModel
+{
+    double flashTolerance() const
+    { return Opm::Parameters::Get<Opm::Parameters::FlashTolerance<double>>(); }
+    int flashVerbosity() const
+    { return Opm::Parameters::Get<Opm::Parameters::FlashVerbosity>(); }
+    Opm::PTFlashMethod flashTwoPhaseMethod() const
+    {
+        return Opm::ptFlashMethodFromString(
+            Opm::Parameters::Get<Opm::Parameters::FlashTwoPhaseMethod>());
+    }
+};
+
 template<bool waterEnabled>
 struct TestContext
 {
@@ -223,6 +237,7 @@ struct TestContext
     void updatePrimaryIntensiveQuantities(unsigned timeIdx) { iq.update(*this, 0, timeIdx); }
     const auto& primaryVars(unsigned, unsigned) const { return simulator_.primary; }
     const TestProblem& problem() const { return simulator_.problem; }
+    TestFlashModel model() const { return {}; }
     const auto& intensiveQuantities(unsigned, unsigned) const { return iq; }
     const IntensiveQuantities<waterEnabled>* thermodynamicHint(unsigned, unsigned) const
     { return nullptr; }

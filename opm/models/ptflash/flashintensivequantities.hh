@@ -53,8 +53,31 @@
 #include <array>
 #include <iterator>
 #include <string>
+#include <type_traits>
 
 namespace Opm {
+
+namespace detail {
+
+//! The memory a flash solver keeps of a cell's last flash, if it keeps one.
+template <class FlashSolver, class = void>
+struct FlashSolverMemory
+{
+    static constexpr bool available = false;
+    struct Memory {};
+};
+
+template <class FlashSolver>
+struct FlashSolverMemory<FlashSolver,
+                         std::void_t<typename FlashSolver::Memory,
+                                     typename FlashSolver::MemoryOptions>>
+{
+    static constexpr bool available = true;
+    using Memory = typename FlashSolver::Memory;
+    using MemoryOptions = typename FlashSolver::MemoryOptions;
+};
+
+} // namespace detail
 
 /*!
  * \ingroup FlashModel
@@ -134,10 +157,10 @@ public:
         const auto& priVars = elemCtx.primaryVars(dofIdx, timeIdx);
         const auto& problem = elemCtx.problem();
 
-        const Scalar flashTolerance = Parameters::Get<Parameters::FlashTolerance<Scalar>>();
-        const int flashVerbosity = Parameters::Get<Parameters::FlashVerbosity>();
-        const auto ptFlashMethod =
-            ptFlashMethodFromString(Parameters::Get<Parameters::FlashTwoPhaseMethod>());
+        const auto& model = elemCtx.model();
+        const Scalar flashTolerance = model.flashTolerance();
+        const int flashVerbosity = model.flashVerbosity();
+        const PTFlashMethod ptFlashMethod = model.flashTwoPhaseMethod();
         // Extract the overall component mole fractions; the last fraction is dependent.
         ComponentVector z(0.);
         {
@@ -173,6 +196,8 @@ public:
 
         // Get initial K and L from storage initially (if enabled)
         const auto* hint = elemCtx.thermodynamicHint(dofIdx, timeIdx);
+        // The cell's last flash, whose memory the next flash may use.
+        const FlashIntensiveQuantities* lastFlash = hint;
         if (hint) {
              for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
                  const Evaluation& Ktmp = hint->fluidState().K(compIdx);
@@ -184,6 +209,7 @@ public:
         else if (timeIdx == 0 && elemCtx.thermodynamicHint(dofIdx, 1)) {
              // checking the storage cache
              const auto& hint2 = elemCtx.thermodynamicHint(dofIdx, 1);
+             lastFlash = hint2;
              for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
                  const Evaluation& Ktmp = hint2->fluidState().K(compIdx);
                  fluidState_.setKvalue(compIdx, Ktmp);
@@ -208,7 +234,19 @@ public:
                                       elemCtx.globalSpaceIndex(dofIdx, timeIdx)));
         }
         const auto& eos_type = problem.getEosType();
-        FlashSolver::solve(fluidState_, ptFlashMethod, flashTolerance, eos_type, flashVerbosity);
+        bool flashed = false;
+        if constexpr (FlashMemoryTraits::available) {
+            const auto& memoryOptions = flashMemoryOptions_();
+            if (memoryOptions.predict || memoryOptions.phase_memory) {
+                FlashSolver::solve(fluidState_, lastFlash ? &lastFlash->flashMemory_ : nullptr,
+                                   flashMemory_, memoryOptions, ptFlashMethod, flashTolerance,
+                                   eos_type, flashVerbosity);
+                flashed = true;
+            }
+        }
+        if (!flashed) {
+            FlashSolver::solve(fluidState_, ptFlashMethod, flashTolerance, eos_type, flashVerbosity);
+        }
 
         if (flashVerbosity >= 5) {
             std::string phaseCompositions;
@@ -302,14 +340,9 @@ public:
                                             materialParams, fluidState_);
         Valgrind::CheckDefined(relativePermeability_);
 
-        // set the phase viscosity and density
+        // set the phase viscosity and density; the parameter cache already holds
+        // both hydrocarbon phases at their final composition and pressure
         for (unsigned phaseIdx = 0; phaseIdx < numPhases; ++phaseIdx) {
-            if (phaseIdx == static_cast<unsigned int>(FluidSystem::oilPhaseIdx) ||
-                phaseIdx == static_cast<unsigned int>(FluidSystem::gasPhaseIdx))
-            {
-                paramCache.updatePhase(fluidState_, phaseIdx);
-            }
-
             const Evaluation& mu = FluidSystem::viscosity(fluidState_, paramCache, phaseIdx);
 
             fluidState_.setViscosity(phaseIdx, mu);
@@ -416,6 +449,26 @@ public:
     { return porosity_; }
 
 private:
+    using FlashMemoryTraits = detail::FlashSolverMemory<FlashSolver>;
+    using FlashMemory = typename FlashMemoryTraits::Memory;
+
+    //! The memory switches of the flash, read once; off where not registered.
+    static const auto& flashMemoryOptions_()
+    {
+        using FlashMemoryOptions = typename FlashMemoryTraits::MemoryOptions;
+        static const FlashMemoryOptions options = [] {
+            FlashMemoryOptions result;
+            result.predict = Parameters::Get<Parameters::FlashPredictSplit>(false);
+            result.reuse = result.predict
+                && Parameters::Get<Parameters::FlashReuseDerivatives>(false);
+            result.phase_memory = Parameters::Get<Parameters::FlashPhaseMemory>(false);
+            return result;
+        }();
+        return options;
+    }
+
+    //! What the next flash of this cell may use of this one.
+    FlashMemory flashMemory_;
     bool hasHydrocarbon_{true};
     DimMatrix intrinsicPerm_;
     FluidState fluidState_;

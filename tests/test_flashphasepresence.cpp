@@ -196,6 +196,20 @@ struct TestProblem
     { return Dune::FieldMatrix<double, 3, 3>{1.0}; }
 };
 
+// The flash parameters, which the intensive quantities take from the model.
+struct TestFlashModel
+{
+    double flashTolerance() const
+    { return Opm::Parameters::Get<Opm::Parameters::FlashTolerance<double>>(); }
+    int flashVerbosity() const
+    { return Opm::Parameters::Get<Opm::Parameters::FlashVerbosity>(); }
+    Opm::PTFlashMethod flashTwoPhaseMethod() const
+    {
+        return Opm::ptFlashMethodFromString(
+            Opm::Parameters::Get<Opm::Parameters::FlashTwoPhaseMethod>());
+    }
+};
+
 template<bool waterEnabled>
 struct TestContext
 {
@@ -203,6 +217,7 @@ struct TestContext
     TestProblem problem_;
     const TestPrimaryVariables& primaryVars(unsigned, unsigned) const { return priVars; }
     const TestProblem& problem() const { return problem_; }
+    TestFlashModel model() const { return {}; }
     const IntensiveQuantities<waterEnabled>* thermodynamicHint(unsigned, unsigned) const
     { return nullptr; }
     unsigned globalSpaceIndex(unsigned, unsigned) const { return 0; }

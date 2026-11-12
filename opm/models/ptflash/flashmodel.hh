@@ -210,12 +210,29 @@ class FlashModel
 public:
     explicit FlashModel(Simulator& simulator)
         : ParentType(simulator)
-    {
-        // Reject an unknown method here rather than from inside the flash: the
-        // intensive quantities are updated in parallel, where the throw would
-        // escape an OpenMP region and terminate instead of being reported.
-        ptFlashMethodFromString(Parameters::Get<Parameters::FlashTwoPhaseMethod>());
-    }
+        , flashTolerance_(Parameters::Get<Parameters::FlashTolerance<Scalar>>())
+        , flashVerbosity_(Parameters::Get<Parameters::FlashVerbosity>())
+          // Reject an unknown method here rather than from inside the flash: the
+          // intensive quantities are updated in parallel, where the throw would
+          // escape an OpenMP region and terminate instead of being reported.
+        , flashTwoPhaseMethod_(
+              ptFlashMethodFromString(Parameters::Get<Parameters::FlashTwoPhaseMethod>()))
+    {}
+
+    /// The tolerance of the flash. The flash parameters are read once here:
+    /// a parameter lookup finds the parameter by its demangled type name,
+    /// which costs more than a flash, and the intensive quantities of every
+    /// cell need them on every update.
+    Scalar flashTolerance() const
+    { return flashTolerance_; }
+
+    /// The verbosity of the flash.
+    int flashVerbosity() const
+    { return flashVerbosity_; }
+
+    /// The method of the two-phase split of the flash.
+    PTFlashMethod flashTwoPhaseMethod() const
+    { return flashTwoPhaseMethod_; }
 
     /*!
      * \brief Register all run-time parameters for the immiscible model.
@@ -245,6 +262,15 @@ public:
         Parameters::Register<Parameters::FlashTwoPhaseMethod>
             ("Method for solving vapor-liquid composition. Available options include: "
              "ssi, newton, ssi+newton");
+        Parameters::Register<Parameters::FlashPredictSplit>
+            ("Predict the two-phase flash of a cell from its last answer and check the "
+             "prediction with one fugacity evaluation");
+        Parameters::Register<Parameters::FlashReuseDerivatives>
+            ("With FlashPredictSplit, an accepted prediction reuses the derivatives of the "
+             "cell's last answer");
+        Parameters::Register<Parameters::FlashPhaseMemory>
+            ("Skip the stability test of a single-phase cell whose last test was decisive "
+             "and whose state has hardly changed since");
 
         Parameters::SetDefault<Parameters::FlashTolerance<Scalar>>(1.e-8);
         Parameters::SetDefault<Parameters::EnableIntensiveQuantityCache>(true);
@@ -317,6 +343,11 @@ public:
             this->addOutputModule(std::make_unique<VtkEnergyModule<TypeTag>>(this->simulator_));
         }
     }
+
+private:
+    Scalar flashTolerance_;
+    int flashVerbosity_;
+    PTFlashMethod flashTwoPhaseMethod_;
 };
 
 } // namespace Opm
