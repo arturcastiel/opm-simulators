@@ -53,8 +53,31 @@
 #include <array>
 #include <iterator>
 #include <string>
+#include <type_traits>
 
 namespace Opm {
+
+namespace detail {
+
+//! The memory a flash solver keeps of a cell's last flash, if it keeps one.
+template <class FlashSolver, class = void>
+struct FlashSolverMemory
+{
+    static constexpr bool available = false;
+    struct Memory {};
+};
+
+template <class FlashSolver>
+struct FlashSolverMemory<FlashSolver,
+                         std::void_t<typename FlashSolver::Memory,
+                                     typename FlashSolver::MemoryOptions>>
+{
+    static constexpr bool available = true;
+    using Memory = typename FlashSolver::Memory;
+    using MemoryOptions = typename FlashSolver::MemoryOptions;
+};
+
+} // namespace detail
 
 /*!
  * \ingroup FlashModel
@@ -211,13 +234,17 @@ public:
                                       elemCtx.globalSpaceIndex(dofIdx, timeIdx)));
         }
         const auto& eos_type = problem.getEosType();
-        const auto& memoryOptions = flashMemoryOptions_();
-        if (memoryOptions.predict || memoryOptions.phase_memory) {
-            FlashSolver::solve(fluidState_, lastFlash ? &lastFlash->flashMemory_ : nullptr,
-                               flashMemory_, memoryOptions, ptFlashMethod, flashTolerance,
-                               eos_type, flashVerbosity);
+        bool flashed = false;
+        if constexpr (FlashMemoryTraits::available) {
+            const auto& memoryOptions = flashMemoryOptions_();
+            if (memoryOptions.predict || memoryOptions.phase_memory) {
+                FlashSolver::solve(fluidState_, lastFlash ? &lastFlash->flashMemory_ : nullptr,
+                                   flashMemory_, memoryOptions, ptFlashMethod, flashTolerance,
+                                   eos_type, flashVerbosity);
+                flashed = true;
+            }
         }
-        else {
+        if (!flashed) {
             FlashSolver::solve(fluidState_, ptFlashMethod, flashTolerance, eos_type, flashVerbosity);
         }
 
@@ -427,17 +454,19 @@ public:
     { return porosity_; }
 
 private:
-    using FlashMemory = typename FlashSolver::Memory;
-    using FlashMemoryOptions = typename FlashSolver::MemoryOptions;
+    using FlashMemoryTraits = detail::FlashSolverMemory<FlashSolver>;
+    using FlashMemory = typename FlashMemoryTraits::Memory;
 
-    //! The memory switches of the flash, read once.
-    static const FlashMemoryOptions& flashMemoryOptions_()
+    //! The memory switches of the flash, read once; off where not registered.
+    static const auto& flashMemoryOptions_()
     {
+        using FlashMemoryOptions = typename FlashMemoryTraits::MemoryOptions;
         static const FlashMemoryOptions options = [] {
             FlashMemoryOptions result;
-            result.predict = Parameters::Get<Parameters::FlashPredictSplit>();
-            result.reuse = result.predict && Parameters::Get<Parameters::FlashReuseDerivatives>();
-            result.phase_memory = Parameters::Get<Parameters::FlashPhaseMemory>();
+            result.predict = Parameters::Get<Parameters::FlashPredictSplit>(false);
+            result.reuse = result.predict
+                && Parameters::Get<Parameters::FlashReuseDerivatives>(false);
+            result.phase_memory = Parameters::Get<Parameters::FlashPhaseMemory>(false);
             return result;
         }();
         return options;
