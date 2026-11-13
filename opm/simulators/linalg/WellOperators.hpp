@@ -248,7 +248,24 @@ public:
     void apply( const X& x, Y& y ) const override
     {
       OPM_TIMEBLOCK(apply);
-      A_.mv(x, y);
+      if constexpr (requires { A_[0].begin(); }) {
+          // y = A x, rows split over the OpenMP threads; each row sums in the
+          // order of BCRSMatrix::mv, so the result does not depend on the threads.
+          const int n = static_cast<int>(A_.N());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+          for (int i = 0; i < n; ++i) {
+              const auto& row = A_[i];
+              auto& yi = y[i];
+              yi = 0.0;
+              for (auto it = row.begin(); it != row.end(); ++it) {
+                  it->umv(x[it.index()], yi);
+              }
+          }
+      } else {
+          A_.mv(x, y);
+      }
 
       // add well model modification to y
       wellOper_.apply(x, y);
@@ -258,7 +275,22 @@ public:
     void applyscaleadd (field_type alpha, const X& x, Y& y) const override
     {
       OPM_TIMEBLOCK(applyscaleadd);
-      A_.usmv(alpha, x, y);
+      if constexpr (requires { A_[0].begin(); }) {
+          // as BCRSMatrix::usmv, rows split over the OpenMP threads
+          const int n = static_cast<int>(A_.N());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+          for (int i = 0; i < n; ++i) {
+              const auto& row = A_[i];
+              auto& yi = y[i];
+              for (auto it = row.begin(); it != row.end(); ++it) {
+                  it->usmv(alpha, x[it.index()], yi);
+              }
+          }
+      } else {
+          A_.usmv(alpha, x, y);
+      }
 
       // add scaled well model modification to y
       wellOper_.applyscaleadd(alpha, x, y);

@@ -470,13 +470,29 @@ public:
   void updatePreconditioner(std::shared_ptr<SmootherType> smoother,
                             CoarseLevelSolverPolicy& coarsePolicy)
   {
+    updatePreconditioner(smoother, coarsePolicy, true);
+  }
+
+  /**
+   * @brief Update the smoother and the coarse level matrix.
+   *
+   * With updateCoarseSolver false the coarse level solver keeps the
+   * preconditioner it built for an earlier coarse matrix; it then works
+   * on the new coarse matrix with that preconditioner.
+   */
+  void updatePreconditioner(std::shared_ptr<SmootherType> smoother,
+                            CoarseLevelSolverPolicy& coarsePolicy,
+                            bool updateCoarseSolver)
+  {
     smoother_ = smoother;
     // We assume the matrix has the same sparsity structure and memory locations throughout, only the values are changed.
     smoother_->update();
     if (coarseSolver_) {
       policy_->calculateCoarseEntries(*operator_);
       coarsePolicy.setCoarseOperator(*policy_);
-      coarseSolver_->updatePreconditioner();
+      if (updateCoarseSolver) {
+        coarseSolver_->updatePreconditioner();
+      }
     } else {
       // we should probably not be heere
       policy_->createCoarseLevelSystem(*operator_);

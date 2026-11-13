@@ -35,6 +35,7 @@
 #include <opm/simulators/linalg/PressureBhpTransferPolicy.hpp>
 #include <opm/simulators/linalg/PressureTransferPolicy.hpp>
 #include <opm/simulators/linalg/PropertyTree.hpp>
+#include <opm/simulators/linalg/ThreadBlockILU0.hpp>
 #include <opm/simulators/linalg/WellOperators.hpp>
 #include <opm/simulators/linalg/amgcpr.hh>
 #include <opm/simulators/linalg/ilufirstelement.hh>

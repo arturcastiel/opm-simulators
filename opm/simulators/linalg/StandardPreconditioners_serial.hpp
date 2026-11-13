@@ -92,6 +92,12 @@ struct StandardPreconditioners<Operator, Dune::Amg::SequentialInformation, typen
             DUNE_UNUSED_PARAMETER(prm);
             return std::make_shared<MultithreadDILU<M, V, V>>(op.getmat());
         });
+        F::addCreator("tbilu0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            const int parts = prm.get<int>("ranges", 8);
+            const double w = prm.get<double>("relaxation", 1.0);
+            const bool byColumns = prm.get<std::string>("partition", "columns") == "columns";
+            return std::make_shared<ThreadBlockILU0<M, V, V>>(op.getmat(), parts, w, byColumns);
+        });
 #if HAVE_AVX2_EXTENSION
         F::addCreator("mixed-ilu0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
             DUNE_UNUSED_PARAMETER(prm);
